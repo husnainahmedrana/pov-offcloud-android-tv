@@ -19,7 +19,7 @@ This is **Rajput's Android TV edition**, forked from [MM-482/pov-android-tv](htt
 
 - **Flix interface** — a living backdrop that follows whatever you focus, title logos, a feature that rotates through the Top 10 every five seconds, numbered Top 10 shelves and a menu that stays hidden until you need it.
 - **Smooth on modest TV hardware** — shelves draw only what is on screen, artwork is sized to its card and decoded off the UI thread, and the backdrop is a single pre-shaded image. Measured on an onn 4K box, janky frames fell from 55% to under 10%.
-- **TMDB or Cinemeta catalogs** — add your own free TMDB key for Trending, Popular and *Now Playing in Cinemas* (in your chosen country) movies, plus Trending, Popular and Airing Today shows. Without a key, Home uses Cinemeta.
+- **TMDB or Cinemeta catalogs** — add your own free TMDB key for Trending, Popular and *Now Playing in Cinemas* (in your chosen country) movies, plus Trending and Popular shows. Without a key, Home uses Cinemeta.
 - **Play that just works** — Play searches every enabled source provider, checks your debrid caches in parallel and starts the best playable link, resuming where you left off. Continue Watching resumes instantly from the last link (kept 24 hours).
 - **A player built for the remote** — one-second precision seeking that accelerates the longer you hold, an *Ends at* clock, a Stremio-style loading splash, Stop and Browse, audio and subtitle menus and volume boost.
 - **Sensible defaults** — bold subtitles on a transparent background, 3% above the bottom, English subtitles and audio.

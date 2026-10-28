@@ -33,7 +33,7 @@ class TmdbCatalogTest {
     @Test fun `shelves keep the chosen order and map TMDB titles to IMDb ids`() {
         val requests = mutableListOf<Pair<String, Map<String, String>>>()
         val shelves = catalog("abc123", MemoryIds(), requests).homeShelves()
-        assertEquals(listOf("Trending Movies Today", "Popular Movies", "Now Playing in Cinemas", "Trending Shows Today", "Popular Shows", "Airing Today"), shelves.map { it.title })
+        assertEquals(listOf("Trending Movies Today", "Popular Movies", "Now Playing in Cinemas", "Trending Shows Today", "Popular Shows"), shelves.map { it.title })
         val movie = shelves[1].items.single()
         assertEquals("tt011000", movie.imdbId)
         assertEquals("2026", movie.year)

@@ -76,7 +76,8 @@ class CatalogApi internal constructor(private val publicJson: (String) -> JSONOb
             title = parsed.title.ifBlank { item.title },
             year = parsed.year.ifBlank { item.year },
             poster = parsed.poster.ifBlank { item.poster },
-            background = parsed.background.ifBlank { item.background },
+            // With TMDB catalogs, keep the card's TMDB backdrop instead of Cinemeta's much larger one.
+            background = if (item.background.startsWith("https://image.tmdb.org/")) item.background else parsed.background.ifBlank { item.background },
             description = parsed.description.ifBlank { item.description },
             genres = parsed.genres.ifEmpty { item.genres },
             runtime = parsed.runtime.ifBlank { item.runtime },
@@ -110,7 +111,8 @@ class CatalogApi internal constructor(private val publicJson: (String) -> JSONOb
                     episode = episode,
                     title = video.optString("title").ifBlank { video.optString("name") }.ifBlank { "Episode $episode" },
                     released = video.optString("released"),
-                    thumbnail = artwork(video.optString("thumbnail"))
+                    thumbnail = artwork(video.optString("thumbnail")),
+                    overview = video.optString("overview").ifBlank { video.optString("description") }.trim().take(600)
                 )
             }.distinctBy { it.season to it.episode }.sortedWith(compareBy({ it.season }, { it.episode }))
         } else emptyList()

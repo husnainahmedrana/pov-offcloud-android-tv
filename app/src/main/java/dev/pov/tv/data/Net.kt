@@ -184,5 +184,5 @@ object Net {
         } catch (_: Exception) { 0 }
     }
 
-    private val PUBLIC_METADATA_HOSTS = setOf("v3-cinemeta.strem.io", "cinemeta-catalogs.strem.io")
+    private val PUBLIC_METADATA_HOSTS = setOf("v3-cinemeta.strem.io", "cinemeta-catalogs.strem.io", "cinemeta-live.strem.io")
 }

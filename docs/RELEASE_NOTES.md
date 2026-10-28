@@ -1,7 +1,25 @@
-# POV Rajput 0.2.21
+# POV Rajput 0.2.22
+
+## Smoother
+
+- **Opening a movie or show feels instant.** Resting on a poster prepares its details and full-screen backdrop in the background, so the page opens at once, without a "Loading" screen. The backdrop grows from Home's corner to full screen, and the title, buttons, seasons and episodes rise into place.
+- **Changing season** slides the new episodes in from the side you moved toward.
+- **The player fades in and out,** and the mini player grows into its corner when you return to the app.
+
+## New
+
+- **Episode synopses.** Every episode in a show's list now shows its synopsis, with the episode number and air date.
 
 ## Faster
 
-- **Home opens instantly.** The app keeps the rows from your last visit and shows them straight away, then refreshes them in the background. New rows replace the saved ones while you are at the top of Home; otherwise they appear on your next visit. Saved rows older than 6 hours, or from a different TMDB key, country or theme, are not used.
-- **Posters load about three times faster.** Artwork now downloads over HTTP/2, sharing one connection per image server, eight at a time, with a 40 MB cache on the TV.
-- **Cards download less.** The title logo on each card uses a smaller image, cutting artwork data by about a quarter. The feature, details and player keep the large logo.
+- **Smaller backdrops with TMDB.** Home's feature and details backdrops use the same 780-pixel TMDB image as the cards, so opening a title reuses what is already loaded. Without a TMDB key, artwork is unchanged; Settings now notes that a TMDB key makes artwork faster.
+
+## Fixes
+
+- **Shows that would not open now open.** Cinemeta began sending show details from a new server, which the app rejected with "The public catalog returned an unsupported address."
+- **Right from Play on a show goes to the first season.**
+- **Opening a title no longer shows the previous title's backdrop** while its own loads.
+
+## Changed
+
+- **Airing Today was removed from TMDB catalogs.**

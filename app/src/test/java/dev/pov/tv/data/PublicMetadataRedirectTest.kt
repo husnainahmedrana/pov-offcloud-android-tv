@@ -7,6 +7,13 @@ import java.net.URL
 class PublicMetadataRedirectTest {
     private val origin = URL("https://v3-cinemeta.strem.io/catalog/movie/top.json")
 
+    @Test fun `Cinemeta live details redirect is accepted`() {
+        val details = URL("https://v3-cinemeta.strem.io/meta/series/tt2531336.json")
+        val target = Net.publicMetadataRedirect(details, "https://cinemeta-live.strem.io/meta/series/tt2531336.json", 5)
+        assertEquals("cinemeta-live.strem.io", target.host)
+        assertEquals("/meta/series/tt2531336.json", target.path)
+    }
+
     @Test fun `Cinemeta official catalog redirect is accepted without credentials`() {
         val target = Net.publicMetadataRedirect(origin, "https://cinemeta-catalogs.strem.io/top/catalog/movie/top.json", 5)
         assertEquals("cinemeta-catalogs.strem.io", target.host)

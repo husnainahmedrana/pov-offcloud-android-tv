@@ -34,7 +34,6 @@ class TmdbCatalog internal constructor(
             Shelf("Now Playing in Cinemas", "movie", "/movie/now_playing?region=$region"),
             Shelf("Trending Shows Today", "series", "/trending/tv/day"),
             Shelf("Popular Shows", "series", "/tv/popular"),
-            Shelf("Airing Today", "series", "/tv/airing_today"),
         )
         val pool = Executors.newFixedThreadPool(6)
         try {

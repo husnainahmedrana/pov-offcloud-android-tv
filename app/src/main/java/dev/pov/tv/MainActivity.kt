@@ -155,7 +155,7 @@ class MainActivity : Activity() {
     }
     override fun onPause() {
         // Keep the outgoing target until the incoming fullscreen view can attach first.
-        resumed = false
+        resumed = false; miniFrame?.setTag(R.id.pov_mini_shown, false)
         super.onPause()
     }
     override fun onStop() {
@@ -520,6 +520,7 @@ class MainActivity : Activity() {
         generation = ++pageSequence; resolvingGeneration = null; isHome = false; wantsContentFocus = true; flixScrollTarget = -1
         featureHandler.removeCallbacksAndMessages(null); featureShown = null; backdropArt.alpha = 1f
         bottomAligner?.let(body::removeOnLayoutChangeListener); bottomAligner = null
+        for (index in 0 until body.childCount) body.getChildAt(index).animate().cancel()
         focusController.reset(); body.removeAllViews(); heroBackdrop.visibility = View.GONE
         body.animate().cancel(); body.alpha = 1f; body.translationY = 0f
         body.setPadding(0, dp(if (theme.layout.navigation == NavigationPlacement.LEFT_RAIL) 63 else 15), 0, contentBottomPadding())
@@ -609,7 +610,7 @@ class MainActivity : Activity() {
     private var pendingShelves: List<CatalogApi.HomeShelf>? = null
     /** Saved rows belong to one catalog setup: changing the TMDB key, country or theme starts fresh. */
     private fun shelfRevision() = java.security.MessageDigest.getInstance("SHA-256")
-        .digest(listOf(theme.id, store.get(TMDB_KEY), tmdbRegion()).joinToString("\u0000").toByteArray())
+        .digest(listOf(SHELF_SET_VERSION, theme.id, store.get(TMDB_KEY), tmdbRegion()).joinToString("\u0000").toByteArray())
         .joinToString("") { "%02x".format(it.toInt() and 255) }
 
     private fun cachedContinueWatching(): List<Pair<PlaybackIdentity, Double>>? = try {
@@ -806,16 +807,29 @@ class MainActivity : Activity() {
     }
 
     private var bottomAligner: View.OnLayoutChangeListener? = null
+
+    /**
+     * Details open with their parts rising into place one after another: title, buttons, season tabs, episodes.
+     * Each part moves on its own (never the whole page), briefly, so it stays smooth on TV hardware.
+     */
+    private fun riseIn() {
+        val lift = dp(24).toFloat()
+        for (index in 0 until minOf(body.childCount, 6)) {
+            val child = body.getChildAt(index)
+            child.animate().cancel(); child.alpha = 0f; child.translationY = lift
+            child.animate().alpha(1f).translationY(0f).setStartDelay(index * 40L).setDuration(260).setInterpolator(EASE_OUT).start()
+        }
+    }
     /**
      * Movie details sit at the foot of the screen so the backdrop stays open above them. Re-applied on
      * layout, because the title logo arriving changes the content height.
      */
-    private fun alignToBottom(id: Int) {
+    private fun alignToBottom(id: Int, reveal: () -> Unit = {}) {
         // The details stay hidden until they sit at the foot of the screen, so they never drop into place.
         var placed = false
         fun reveal() {
             if (placed || id != generation) return
-            placed = true; body.alpha = 1f
+            placed = true; body.alpha = 1f; reveal()
         }
         body.animate().cancel(); body.alpha = 0f; body.translationY = 0f
         val listener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -957,13 +971,25 @@ class MainActivity : Activity() {
         val width = if (home) (resources.displayMetrics.widthPixels * HOME_BACKDROP_SCALE).toInt() else -1
         val height = if (home) width * 9 / 16 else -1
         if (params.width != width || params.height != height) {
+            val wasCorner = params.width > 0
             params.width = width; params.height = height; params.gravity = Gravity.TOP or Gravity.END
             heroBackdrop.layoutParams = params
+            // Grow from Home's corner to full screen (or settle back), scaling about the top-right corner
+            // where the two layouts meet, instead of snapping between sizes.
+            if (wasCorner != home) {
+                val screen = resources.displayMetrics.widthPixels.toFloat()
+                heroBackdrop.animate().cancel()
+                heroBackdrop.pivotX = if (home) width.toFloat() else screen; heroBackdrop.pivotY = 0f
+                val from = if (home) 1f / HOME_BACKDROP_SCALE else HOME_BACKDROP_SCALE
+                heroBackdrop.scaleX = from; heroBackdrop.scaleY = from
+                heroBackdrop.animate().scaleX(1f).scaleY(1f).setDuration(380).setInterpolator(EASE_OUT).start()
+            }
         }
     }
 
     private fun featureHero(): FrameLayout? = if (isHome) body.findViewWithTag("featured-hero") else null
-    private fun backdropFor(item: MediaItemData) = item.background.ifBlank {
+    // TMDB backdrops use the 780 px file the cards already load, so opening a title reuses the card's image.
+    private fun backdropFor(item: MediaItemData) = item.background.replace("/t/p/w1280/", "/t/p/w780/").ifBlank {
         if (item.imdbId.matches(Regex("tt\\d+"))) "https://images.metahub.space/background/medium/${item.imdbId}/img" else item.poster
     }
     private fun logoFor(item: MediaItemData) =
@@ -999,6 +1025,7 @@ class MainActivity : Activity() {
     }
 
     private fun scheduleFeature(item: MediaItemData) {
+        prefetchDetails(item)
         if (!flix || !isHome) return
         featureHandler.removeCallbacksAndMessages(null)
         featureHandler.postDelayed({ showFeature(item) }, 280)
@@ -1253,7 +1280,7 @@ class MainActivity : Activity() {
         val bottomPadding = contentBottomPadding()
         if (body.paddingBottom != bottomPadding) body.setPadding(body.paddingLeft, body.paddingTop, body.paddingRight, bottomPadding)
         if (!active) {
-            miniPlayer?.let(InAppPlaybackSession::detachPlayerView); miniFrame?.visibility = View.GONE
+            miniPlayer?.let(InAppPlaybackSession::detachPlayerView); miniFrame?.visibility = View.GONE; miniFrame?.setTag(R.id.pov_mini_shown, false)
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             return
         }
@@ -1294,7 +1321,15 @@ class MainActivity : Activity() {
             miniFocus = MiniPlayerFocusRouter(body, frame)
             frame.post { focusController.revealCurrent() }
         }
-        miniFrame?.visibility = View.VISIBLE
+        miniFrame?.let { frame ->
+            if (frame.visibility != View.VISIBLE || frame.getTag(R.id.pov_mini_shown) != true) {
+                // Arriving from the full player: the mini player grows into its corner instead of appearing.
+                frame.setTag(R.id.pov_mini_shown, true); frame.visibility = View.VISIBLE
+                frame.pivotX = frame.layoutParams.width.toFloat(); frame.pivotY = frame.layoutParams.height.toFloat()
+                frame.alpha = 0f; frame.scaleX = 0.6f; frame.scaleY = 0.6f
+                frame.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(300).setInterpolator(EASE_OUT).start()
+            }
+        }
         val status = when {
             exo?.playerError != null -> "Playback stopped"
             exo?.playbackState == androidx.media3.common.Player.STATE_ENDED -> "Finished"
@@ -1686,6 +1721,10 @@ class MainActivity : Activity() {
         const val HOME_KEEP_MS = 15 * 60_000L
         const val HOME_BACKDROP_SCALE = 0.72f
         const val COMPACT_HERO_HEIGHT = 236
+        val EASE_OUT = android.view.animation.DecelerateInterpolator(1.6f)
+        const val DETAILS_KEEP_MS = 10 * 60_000L
+        /** Bump when the set of Home rows changes, so rows saved under the old set are not shown. */
+        const val SHELF_SET_VERSION = "2"
         const val RESUME_CARD_WIDTH = 300; const val RESUME_CARDS = "home.resume_cards" }
 
     private fun searchResults(query: String, filter: String = "all", cached: CatalogApi.SearchResults? = null) {
@@ -1718,11 +1757,68 @@ class MainActivity : Activity() {
         current = { detailsFor(item, episode) }
         fun render(id: Int, result: MediaItemData) {
             body.removeAllViews(); hero(result, false); mediaActions(result, episode)
-            if (result.type == "series") seasonPicker(result)
-            else if (flix) alignToBottom(id)
+            if (result.type == "series") { seasonPicker(result); if (flix) body.post { if (id == generation) riseIn() } }
+            else if (flix) alignToBottom(id, reveal = ::riseIn)
         }
-        val id = page(item.title, "Loading title…")
-        read(id, { catalog.details(item) }) { result -> render(id, result) }
+        // Details fetched while the poster had focus (or opened recently) show at once.
+        cachedDetails(item)?.let { result -> val id = page(""); backdropStandIn(item, result); render(id, result); focusAfterRender(id); return }
+        // Otherwise the backdrop carries over straight away and the details rise in when they arrive,
+        // with no "Loading" page in between.
+        val id = page("")
+        if (flix) { placeBackdrop(home = false); heroBackdrop.visibility = View.VISIBLE; backdropStandIn(item); image(backdropArt, backdropFor(item), feature = true) }
+        load(id, { fetchDetails(item) }, readOnly = true, quiet = flix) { result -> render(id, result) }
+    }
+
+    private class CachedDetails(val result: MediaItemData, val at: Long)
+    private val detailsCache = LruCache<String, CachedDetails>(60)
+    private val detailsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val prefetchHandler = Handler(Looper.getMainLooper())
+    private fun detailsKey(item: MediaItemData) = "${item.type}:${item.imdbId}"
+    private fun cachedDetails(item: MediaItemData): MediaItemData? = synchronized(detailsCache) {
+        detailsCache.get(detailsKey(item))?.takeIf { android.os.SystemClock.elapsedRealtime() - it.at < DETAILS_KEEP_MS }?.result
+    }
+    private fun fetchDetails(item: MediaItemData): MediaItemData = catalog.details(item).also { result ->
+        synchronized(detailsCache) { detailsCache.put(detailsKey(item), CachedDetails(result, android.os.SystemClock.elapsedRealtime())) }
+    }
+
+    /** Downloads and shades a details backdrop ahead of time, so the page opens with its picture ready. */
+    private fun preloadBackdrop(address: String) {
+        if (!flix || !address.startsWith("https://")) return
+        val key = "backdrop:$address"
+        if (bitmapCache.get(key) != null || !backdropsInFlight.add(key)) return
+        featureImages.execute {
+            try { fetchBitmap(address, BACKDROP_WIDTH)?.let { shadedBackdrop(it, false) }?.let { bitmapCache.put(key, it) } }
+            catch (_: Exception) { /* The page loads it again when opened. */ } finally { backdropsInFlight.remove(key) }
+        }
+    }
+    private val backdropsInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * Until the sharp backdrop is ready, the card's own picture (already loaded) fills the screen, dimmed,
+     * and the backdrop fades in over it; the page never opens on an empty background.
+     */
+    private fun backdropStandIn(item: MediaItemData, result: MediaItemData = item) {
+        if (!flix || bitmapCache.get("backdrop:${backdropFor(result)}") != null) return
+        val card = listOf(item.background, backdropFor(item)).filter(String::isNotBlank).map(::thumbnail)
+            .firstNotNullOfOrNull { bitmapCache.get(it) }
+        backdropArt.animate().cancel(); backdropArt.setTag(R.id.pov_backdrop_key, null)
+        // Without this title's own picture, the page opens dark rather than on the previous title's art.
+        if (card != null) { backdropArt.setImageBitmap(card); backdropArt.alpha = 0.55f }
+        else { backdropArt.setImageDrawable(null); backdropArt.tag = null; backdropArt.alpha = 0f }
+    }
+
+    /** A short rest on a poster fetches its details in the background, so opening it is usually instant. */
+    private fun prefetchDetails(item: MediaItemData) {
+        prefetchHandler.removeCallbacksAndMessages(null)
+        if (!item.imdbId.matches(Regex("tt\\d+")) || cachedDetails(item) != null) return
+        prefetchHandler.postDelayed({
+            val key = detailsKey(item)
+            if (cachedDetails(item) != null || !detailsInFlight.add(key)) return@postDelayed
+            metadataWorker.execute {
+                try { preloadBackdrop(backdropFor(fetchDetails(item))) }
+                catch (_: Exception) { /* Opening it fetches again. */ } finally { detailsInFlight.remove(key) }
+            }
+        }, 300)
     }
 
     private fun mediaActions(result: MediaItemData, episode: PlaybackIdentity? = null) {
@@ -1766,7 +1862,9 @@ class MainActivity : Activity() {
         val selector = button("") { }
         val host = column()
         val tabs = mutableListOf<Pair<Int, TextView>>()
+        var shown: Int? = null
         fun render(season: Int) {
+            val previous = shown; shown = season
             selectedSeasons[result.imdbId] = season
             val label = if (season == 0) "Specials & extras" else "Season $season"
             val episodes = result.episodes.filter { it.season == season }.sortedBy { it.episode }
@@ -1776,8 +1874,13 @@ class MainActivity : Activity() {
             else host.addView(text(label, 18, ink, true), margin(-1, -2, top = 16, bottom = 10))
             episodes.forEach { episode ->
                 val identity = PlaybackIdentity(result.imdbId, "series", result.title, episode.season, episode.episode)
-                if (flix) host.addView(episodeRow(identity, episode, result), margin(-1, 108, bottom = 8))
+                if (flix) host.addView(episodeRow(identity, episode, result), margin(-1, -2, bottom = 8))
                 else host.addView(episodeButton(identity, episode.title, episode.released, episode.released.take(10)), margin(-1, 62, bottom = 7))
+            }
+            // A later season slides in from the right, an earlier one from the left.
+            if (flix && previous != null) {
+                host.animate().cancel(); host.alpha = 0f; host.translationX = dp(if (season > previous) 36 else -36).toFloat()
+                host.animate().alpha(1f).translationX(0f).setDuration(240).setInterpolator(EASE_OUT).start()
             }
             focusAfterRender(generation)
         }
@@ -1805,6 +1908,12 @@ class MainActivity : Activity() {
                 row.addView(tab, margin(-2, 36, right = 8))
             }
             body.addView(host, margin(-1, -2, top = 8))
+            tabs.firstOrNull()?.second?.let { first ->
+                first.id = View.generateViewId()
+                (0 until body.childCount).map(body::getChildAt).filterIsInstance<ViewGroup>()
+                    .firstOrNull { row -> (0 until row.childCount).any { (row.getChildAt(it).tag as? String)?.startsWith("primary:") == true } }
+                    ?.let { actions -> (actions.childCount - 1 downTo 0).map(actions::getChildAt).firstOrNull { it.isFocusable }?.nextFocusRightId = first.id }
+            }
         } else { body.addView(selector, margin(370, 44, top = 15)); body.addView(host) }
         render(EpisodePresentation.selectedSeason(result.episodes, selectedSeasons[result.imdbId])!!)
     }
@@ -1822,7 +1931,7 @@ class MainActivity : Activity() {
         val number = label.ifBlank { if (identity.season == 0) "Special ${identity.episode}" else "Episode ${identity.episode}" }
         val detail = if (future) "Not yet released" else note.ifBlank { episode.released.take(10) }
         val row = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), dp(6), dp(12), dp(6)); background = rounded(withAlpha(Color.WHITE, 14), 6)
+            gravity = Gravity.TOP; minimumHeight = dp(107); setPadding(dp(6), dp(6), dp(12), dp(6)); background = rounded(withAlpha(Color.WHITE, 14), 6)
             isFocusable = true; isFocusableInTouchMode = true; isClickable = true
             tag = "episode:${identity.imdbId}:${identity.season}:${identity.episode}"
             contentDescription = "$number. ${episode.title}. $detail"
@@ -1834,10 +1943,13 @@ class MainActivity : Activity() {
         image(art, episode.thumbnail.ifBlank { backdropFor(show) }, feature = true)
         if (future) still.addView(View(this).apply { setBackgroundColor(0x99000000.toInt()) }, FrameLayout.LayoutParams(-1, -1))
         row.addView(still, LinearLayout.LayoutParams(dp(168), dp(95)))
-        val copy = column().apply { setPadding(dp(14), 0, 0, 0) }
-        copy.addView(text(number, 11, muted, true))
+        val copy = column().apply { setPadding(dp(14), dp(2), 0, 0) }
+        copy.addView(text(listOf(number, detail).filter(String::isNotBlank).joinToString("  ·  "), 11, muted, true))
         copy.addView(text(episode.title, 15, ink, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, margin(-1, -2, top = 4))
-        copy.addView(text(detail, 11, muted), margin(-1, -2, top = 6))
+        // Every episode's synopsis is visible in the list, as in a TV guide.
+        if (episode.overview.isNotBlank() && !future) copy.addView(text(episode.overview, 12, 0xFFD2D2D2.toInt()).apply {
+            maxLines = 3; ellipsize = TextUtils.TruncateAt.END; setLineSpacing(dp(2).toFloat(), 1f)
+        }, margin(-1, -2, top = 5))
         row.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
         row.setOnFocusChangeListener { view, focused ->
             view.background = rounded(if (focused) withAlpha(Color.WHITE, 46) else withAlpha(Color.WHITE, 14), 6)
@@ -2519,7 +2631,9 @@ class MainActivity : Activity() {
         val home = settingsGroup("Home & appearance", "home")
         settingsRow(home, "Theme", theme.displayName, "Layout, colours and artwork style.") { navigate { appearance() } }
         val tmdbKey = store.get(TMDB_KEY)
-        settingsRow(home, "TMDB", if (tmdbKey.isBlank()) "Not set" else "Connected", status = tmdbKey.isNotBlank()) {
+        settingsRow(home, "TMDB", if (tmdbKey.isBlank()) "Not set" else "Connected",
+            "Your own free TMDB key adds TMDB catalogs, and makes artwork load faster: TMDB backdrops are a fraction of the size.",
+            status = tmdbKey.isNotBlank()) {
             inputSetting("TMDB API key", "TMDB API key or API Read Access Token", "", secret = true) { key ->
                 load(generation, { TmdbCatalog(this, key, tmdbRegion()).validate() }) { store.put(TMDB_KEY, key); toast("TMDB connected. Home now uses TMDB catalogs."); refreshSettings() }
             }
@@ -2899,11 +3013,11 @@ class MainActivity : Activity() {
 
     private fun <T> read(id: Int, work: () -> T, done: (T) -> Unit) = load(id, work, readOnly = true, done = done)
 
-    private fun <T> load(id: Int, work: () -> T, readOnly: Boolean = false, done: (T) -> Unit) {
+    private fun <T> load(id: Int, work: () -> T, readOnly: Boolean = false, quiet: Boolean = false, done: (T) -> Unit) {
         pendingLoads[id] = pendingLoads[id].orZero() + 1
         val progress = text("Loading…", 13, muted); body.addView(progress, margin(-1, -2, top = 12, bottom = 12))
         // Flix Home loads behind its splash and backdrop; a text label there only flashes in a corner.
-        if (flix && isHome) progress.visibility = View.INVISIBLE
+        if (quiet || (flix && isHome)) progress.visibility = View.INVISIBLE
         worker.execute {
             if (readOnly && id != generation) { runOnUiThread { pendingLoads[id] = (pendingLoads[id].orZero() - 1).coerceAtLeast(0) }; return@execute }
             try { val result = work(); runOnUiThread { pendingLoads[id] = (pendingLoads[id].orZero() - 1).coerceAtLeast(0); if (id == generation && !isFinishing && !isDestroyed) { body.removeView(progress); done(result); focusAfterRender(id) } } }
@@ -3097,15 +3211,20 @@ class MainActivity : Activity() {
 
     private fun image(view: ImageView, address: String, keep: Boolean = false, feature: Boolean = false, loaded: ((Boolean) -> Unit)? = null) {
         if (!address.startsWith("https://")) { loaded?.invoke(false); return }
-        if (view.tag != address && !keep) view.setImageDrawable(null)
-        view.tag = address
         val backdrop = flix && view === backdropArt
+        // The backdrop is never blanked: the current picture stays until the next one is ready.
+        if (view.tag != address && !keep && !backdrop) view.setImageDrawable(null)
+        view.tag = address
         // Home's corner backdrop only needs soft edges; full-screen (details) art needs heavier shading under its text.
         val corner = backdrop && heroBackdrop.layoutParams.width > 0
         val key = if (corner) "backdrop-corner:$address" else if (backdrop) "backdrop:$address" else address
         fun show(bitmap: Bitmap) {
             view.setImageBitmap(bitmap)
-            if (backdrop) { view.setTag(R.id.pov_backdrop_key, key); view.alpha = 1f }
+            if (backdrop) {
+                view.setTag(R.id.pov_backdrop_key, key)
+                // The details art fades up from the dimmed Home version instead of switching at once.
+                if (view.alpha < 1f) view.animate().alpha(1f).setDuration(300).setInterpolator(EASE_OUT).start() else view.alpha = 1f
+            }
         }
         bitmapCache.get(key)?.let { show(it); loaded?.invoke(true); return }
         // Home's corner art has lighter shading than a details page needs; dim it until the right version is ready.

@@ -105,6 +105,7 @@ class PlayerActivity : Activity() {
         requireNotNull(view.overlayFrameLayout).addView(seekLabel,
             FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         buildSplash()
+        openCurtain()
         val reuse = InAppPlaybackSession.hasActive() &&
             (intent.getBooleanExtra("reuse_session", false) || (savedInstanceState != null && InAppPlaybackSession.matches(intent)))
         if (!reuse && !InAppPlaybackSession.start(this, intent, savedInstanceState)) {
@@ -558,11 +559,39 @@ class PlayerActivity : Activity() {
         }
     }
 
+    /**
+     * A black curtain over everything, video included, fades the player in on open and out before it closes.
+     * SurfaceView video and Activity window animations do not compose smoothly on older TVs, so the motion
+     * happens inside the window instead.
+     */
+    private var curtain: View? = null
+    private var closing = false
+
+    private fun openCurtain() {
+        val cover = View(this).apply { setBackgroundColor(Color.BLACK); isFocusable = false; isClickable = false }
+        (window.decorView as android.view.ViewGroup).addView(cover, android.view.ViewGroup.LayoutParams(-1, -1))
+        curtain = cover
+        view.scaleX = 0.96f; view.scaleY = 0.96f
+        cover.post {
+            view.animate().scaleX(1f).scaleY(1f).setDuration(320).setInterpolator(android.view.animation.DecelerateInterpolator(1.6f)).start()
+            cover.animate().alpha(0f).setDuration(280).withEndAction { cover.visibility = View.GONE }.start()
+        }
+    }
+
     @Suppress("DEPRECATION")
     override fun finish() {
         if (!isFinishing && InAppPlaybackSession.error is VideoCompatibilityException) InAppPlaybackSession.stop()
+        val cover = curtain
+        if (closing || cover == null || isDestroyed || !window.decorView.isAttachedToWindow) { closeNow(); return }
+        closing = true
+        cover.animate().cancel(); cover.visibility = View.VISIBLE
+        cover.animate().alpha(1f).setDuration(180).withEndAction { closeNow() }.start()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun closeNow() {
+        closing = true
         super.finish()
-        // SurfaceView video and an Activity slide/scale animation do not compose smoothly on older TVs.
         overridePendingTransition(0, 0)
     }
 

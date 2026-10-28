@@ -21,7 +21,8 @@ data class EpisodeData(
     val episode: Int,
     val title: String,
     val released: String = "",
-    val thumbnail: String = ""
+    val thumbnail: String = "",
+    val overview: String = ""
 )
 
 data class PlaybackIdentity(

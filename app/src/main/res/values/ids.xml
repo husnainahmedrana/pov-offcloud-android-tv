@@ -1,2 +1,2 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources><item type="id" name="pov_continue_identity" /><item type="id" name="pov_list_scope" /><item type="id" name="pov_feature_item" /><item type="id" name="pov_logo_fallback" /><item type="id" name="pov_backdrop_key" /></resources>
+<resources><item type="id" name="pov_continue_identity" /><item type="id" name="pov_list_scope" /><item type="id" name="pov_feature_item" /><item type="id" name="pov_logo_fallback" /><item type="id" name="pov_backdrop_key" /><item type="id" name="pov_mini_shown" /></resources>
