@@ -484,6 +484,7 @@ class MainActivity : Activity() {
         body.animate().cancel(); body.alpha = 1f; body.translationY = 0f
         body.setPadding(cached.padding[0], cached.padding[1], cached.padding[2], cached.padding[3])
         cached.children.forEach { (it.parent as? ViewGroup)?.removeView(it); body.addView(it) }
+        heroBackdrop.animate().cancel(); heroBackdrop.alpha = 1f; heroBackdrop.scaleX = 1f; heroBackdrop.scaleY = 1f
         heroBackdrop.visibility = cached.heroVisibility; heroBackdrop.layoutParams.height = cached.heroHeight
         placeBackdrop(home = cached.home)
         backdropArt.tag = cached.heroAddress; backdropArt.setImageDrawable(cached.heroArt)
@@ -521,6 +522,7 @@ class MainActivity : Activity() {
         featureHandler.removeCallbacksAndMessages(null); featureShown = null; backdropArt.alpha = 1f
         bottomAligner?.let(body::removeOnLayoutChangeListener); bottomAligner = null
         for (index in 0 until body.childCount) body.getChildAt(index).animate().cancel()
+        heroBackdrop.animate().cancel(); heroBackdrop.alpha = 1f; heroBackdrop.scaleX = 1f; heroBackdrop.scaleY = 1f
         focusController.reset(); body.removeAllViews(); heroBackdrop.visibility = View.GONE
         body.animate().cancel(); body.alpha = 1f; body.translationY = 0f
         body.setPadding(0, dp(if (theme.layout.navigation == NavigationPlacement.LEFT_RAIL) 63 else 15), 0, contentBottomPadding())
@@ -970,6 +972,15 @@ class MainActivity : Activity() {
         val params = heroBackdrop.layoutParams as FrameLayout.LayoutParams
         val width = if (home) (resources.displayMetrics.widthPixels * HOME_BACKDROP_SCALE).toInt() else -1
         val height = if (home) width * 9 / 16 else -1
+        val growsFromCorner = !home && params.width > 0
+        // Opened from a page without a backdrop (Movies, Shows, search, lists): fade in while settling from a
+        // slight zoom, so every details page arrives the way it does from Home.
+        if (!home && !growsFromCorner && heroBackdrop.visibility != View.VISIBLE) {
+            heroBackdrop.animate().cancel()
+            heroBackdrop.pivotX = resources.displayMetrics.widthPixels / 2f; heroBackdrop.pivotY = 0f
+            heroBackdrop.alpha = 0f; heroBackdrop.scaleX = 1.06f; heroBackdrop.scaleY = 1.06f
+            heroBackdrop.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(420).setInterpolator(EASE_OUT).start()
+        }
         if (params.width != width || params.height != height) {
             val wasCorner = params.width > 0
             params.width = width; params.height = height; params.gravity = Gravity.TOP or Gravity.END
