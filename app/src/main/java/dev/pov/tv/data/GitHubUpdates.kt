@@ -120,6 +120,7 @@ class GitHubUpdates(private val context: Context) {
             repeat(6) { hop ->
                 check(allowedDownload(target)) { "The update download address is not trusted." }
                 val connection = target.openConnection() as HttpsURLConnection
+                connection.useCaches = false  // release checks and APK downloads always come fresh
                 connection.connectTimeout = 15_000; connection.readTimeout = 25_000
                 connection.instanceFollowRedirects = false
                 connection.setRequestProperty("User-Agent", "POV-Rajput-Updater")

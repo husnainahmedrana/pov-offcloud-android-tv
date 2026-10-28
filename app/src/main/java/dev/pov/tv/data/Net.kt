@@ -86,6 +86,8 @@ object Net {
             connection.readTimeout = 25_000
             // Do not forward authorization or a token query to an unexpected redirect target.
             connection.instanceFollowRedirects = false
+            // Account and catalog answers always come fresh; only artwork uses the disk cache.
+            connection.useCaches = false
             connection.requestMethod = method.uppercase()
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("User-Agent", "POV-Standalone-AndroidTV/0.1")

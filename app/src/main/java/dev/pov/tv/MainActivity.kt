@@ -64,7 +64,8 @@ class MainActivity : Activity() {
         override fun compareTo(other: ImageTask) = if (page != other.page) other.page.compareTo(page) else order.compareTo(other.order)
     }
     private var imageOrder = 0L
-    private val images = java.util.concurrent.ThreadPoolExecutor(3, 3, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+    // Artwork servers answer slowly but in parallel, so a screen of posters loads several at a time.
+    private val images = java.util.concurrent.ThreadPoolExecutor(6, 6, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
         java.util.concurrent.PriorityBlockingQueue<Runnable>(), backgroundThreads)
     // Feature artwork never waits behind a page full of shelf thumbnails.
     private val featureImages = Executors.newFixedThreadPool(2, backgroundThreads)
@@ -124,6 +125,11 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Posters and backdrops are kept on disk (their servers allow months of caching), so a relaunch shows
+        // them from storage instead of downloading every card again. API requests opt out in Net.
+        if (android.net.http.HttpResponseCache.getInstalled() == null) runCatching {
+            android.net.http.HttpResponseCache.install(java.io.File(cacheDir, "artwork"), ARTWORK_CACHE_BYTES)
+        }
         val debug = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
         val sourcePreview = debug && intent.getBooleanExtra("source_choice_preview", false)
         publicPreview = debug && (intent.getBooleanExtra("public_preview", false) || sourcePreview)
@@ -1648,11 +1654,12 @@ class MainActivity : Activity() {
             }
         }
     }
-    private companion object { const val VOICE_REQUEST = 701; const val PLAYBACK_REQUEST = 702; const val MIC_REQUEST = 703; const val FLIX_ROW_LINE = 236; const val FEATURE_INTERVAL_MS = 5_000L; const val AUTOPLAY_FIRST = "sources.autoplay_first"; const val BACKDROP_WIDTH = 1280; const val CONTINUE_CACHE = "wetrakr.continue_cache"
+    private companion object { const val VOICE_REQUEST = 701; const val PLAYBACK_REQUEST = 702; const val MIC_REQUEST = 703; const val FLIX_ROW_LINE = 236; const val FEATURE_INTERVAL_MS = 5_000L; const val AUTOPLAY_FIRST = "sources.autoplay_first"; const val AUTOPLAY_MAX_GB = "sources.autoplay_max_gb"; const val AUTOPLAY_LIMIT_ON = "sources.autoplay_limit_on"; const val BACKDROP_WIDTH = 1280; const val CONTINUE_CACHE = "wetrakr.continue_cache"
         const val TMDB_KEY = "tmdb.key"; const val TMDB_REGION = "tmdb.region"
         const val HOME_KEEP_MS = 15 * 60_000L
         const val HOME_BACKDROP_SCALE = 0.72f
         const val COMPACT_HERO_HEIGHT = 236
+        const val ARTWORK_CACHE_BYTES = 40L * 1024 * 1024
         const val RESUME_CARD_WIDTH = 300; const val RESUME_CARDS = "home.resume_cards" }
 
     private fun searchResults(query: String, filter: String = "all", cached: CatalogApi.SearchResults? = null) {
@@ -1892,9 +1899,12 @@ class MainActivity : Activity() {
         focusAfterRender(id)
         // Only a fresh search auto-plays; returning to this list leaves the choice to the viewer.
         if (autoplay) {
-            val first = ordered.firstOrNull { (it.cached || it.directUrl.isNotEmpty()) && !tooTall(it) }
+            // Auto-play skips links over the viewer's size limit; links of unknown size stay eligible.
+            val maxBytes = autoplayMaxGb() * 1_000_000_000L
+            fun tooBig(source: SourceItem) = maxBytes > 0 && (source.sizeBytes ?: 0) > maxBytes
+            val first = ordered.firstOrNull { (it.cached || it.directUrl.isNotEmpty()) && !tooTall(it) && !tooBig(it) }
             if (first != null) { toast("Playing the top result · ${first.title.take(60)}"); resolve(first, identity) }
-            else if (checkOnPlay.isNotEmpty()) resolveFirstCached(ordered.filterNot(::tooTall), identity, null)
+            else if (checkOnPlay.isNotEmpty()) resolveFirstCached(ordered.filterNot { tooTall(it) || tooBig(it) }, identity, null)
         }
     }
 
@@ -2508,6 +2518,15 @@ class MainActivity : Activity() {
         }
         settingsToggle(playback, "Auto-play first result", "Play starts the first cached or direct link in your sort order. The full list stays open behind it, so you can pick another link if it fails.",
             store.get(AUTOPLAY_FIRST) == "true") { on -> store.put(AUTOPLAY_FIRST, on.toString()) }
+        settingsToggle(playback, "Auto-play size limit", "Auto-play skips links larger than your limit, so the biggest file it picks is at or under it. Links of unknown size can still play, and you can still choose any link yourself.",
+            store.get(AUTOPLAY_LIMIT_ON) == "true") { on -> store.put(AUTOPLAY_LIMIT_ON, on.toString()); refreshSettings() }
+        if (store.get(AUTOPLAY_LIMIT_ON) == "true") settingsRow(playback, "Largest file for Auto-play", "${autoplayLimitGb()} GB", "Select to type a number of GB.") {
+            inputSetting("Largest file for Auto-play (GB)", "A whole number of GB, e.g. 20", autoplayLimitGb().toString()) { value ->
+                val gb = value.trim().toIntOrNull()
+                if (gb == null || gb !in 1..1000) toast("Enter a whole number of GB, such as 20")
+                else { store.put(AUTOPLAY_MAX_GB, gb.toString()); toast("Auto-play limited to $gb GB"); refreshSettings() }
+            }
+        }
         val readAhead = ReadAheadPreferences(this)
         settingsRow(playback, "Read-ahead", readAhead.mode.label,
             "How far ahead the player downloads, to ride out slow connections. Applies to the next video.") {
@@ -2872,6 +2891,11 @@ class MainActivity : Activity() {
         body.addView(button("Try again") { current() }, margin(150, 40, bottom = 12))
     }
     /** Flix option: Continue Watching as wide resume cards (artwork plus an info panel) instead of regular cards. */
+    /** The saved size limit in GB (20 until the viewer types another). */
+    private fun autoplayLimitGb() = store.get(AUTOPLAY_MAX_GB).toIntOrNull()?.takeIf { it in 1..1000 } ?: 20
+    /** Largest file Auto-play may pick, in GB, or 0 when the limit is switched off. */
+    private fun autoplayMaxGb() = if (store.get(AUTOPLAY_LIMIT_ON) == "true") autoplayLimitGb() else 0
+
     private fun resumeCards() = flix && store.get(RESUME_CARDS) != "false"  // on unless the viewer turns it off
     private fun continueSlot() = margin(if (resumeCards()) RESUME_CARD_WIDTH else cardWidth(), theme.layout.cardHeightDp, right = theme.layout.cardGapDp)
     private fun episodeLine(identity: PlaybackIdentity) = if (identity.type == "series") "S${identity.season} E${identity.episode}" else "Movie"
@@ -3078,8 +3102,10 @@ class MainActivity : Activity() {
 
     private fun fetchBitmap(address: String, targetWidth: Int): Bitmap? {
         val connection = URL(address).openConnection() as HttpsURLConnection
-        connection.connectTimeout = 12_000; connection.readTimeout = 12_000
-        val bytes = try { connection.inputStream.use { it.readBytes() } } finally { connection.disconnect() }
+        connection.connectTimeout = 12_000; connection.readTimeout = 12_000; connection.useCaches = true
+        // Reading to the end and closing the stream (without disconnect()) returns the connection to the
+        // keep-alive pool, so the next poster skips a fresh TLS handshake with the image server.
+        val bytes = connection.inputStream.use { it.readBytes() }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1

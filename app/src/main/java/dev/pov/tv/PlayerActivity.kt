@@ -56,6 +56,9 @@ class PlayerActivity : Activity() {
     private lateinit var splash: FrameLayout
     private lateinit var splashLogo: ImageView
     private lateinit var splashTitle: TextView
+    /** The title's transparent logo in the top-left corner while playback is paused. */
+    private lateinit var pauseLogo: FrameLayout
+    private lateinit var pauseLogoArt: ImageView
     private var splashPulse: ValueAnimator? = null
     private var everReady = false
     /** Until this time, buffering is a decoder catching up after a seek into loaded video, not a network stall. */
@@ -188,10 +191,21 @@ class PlayerActivity : Activity() {
         }
         splash.addView(splashTitle, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         requireNotNull(view.overlayFrameLayout).addView(splash, 0, FrameLayout.LayoutParams(-1, -1))
+        pauseLogoArt = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; adjustViewBounds = true; maxWidth = dp(190); maxHeight = dp(70) }
+        pauseLogo = FrameLayout(this).apply {
+            visibility = View.GONE; alpha = 0f; isFocusable = false
+            addView(pauseLogoArt, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        }
+        requireNotNull(view.overlayFrameLayout).addView(pauseLogo, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+            topMargin = dp(30); leftMargin = dp(30)
+        })
         val imdb = try { intent.getStringExtra("identity")?.let { org.json.JSONObject(it).optString("imdbId") } } catch (_: Exception) { null }
         if (imdb != null && imdb.matches(Regex("tt\\d+"))) {
             loadSplashImage("https://images.metahub.space/background/medium/$imdb/img") { art.setImageBitmap(it) }
-            loadSplashImage("https://images.metahub.space/logo/medium/$imdb/img") { splashLogo.setImageBitmap(it); splashLogo.visibility = View.VISIBLE; splashTitle.visibility = View.GONE }
+            loadSplashImage("https://images.metahub.space/logo/medium/$imdb/img") {
+                splashLogo.setImageBitmap(it); splashLogo.visibility = View.VISIBLE; splashTitle.visibility = View.GONE
+                pauseLogoArt.setImageBitmap(withShadow(it)); updatePauseLogo()
+            }
         }
     }
 
@@ -255,8 +269,38 @@ class PlayerActivity : Activity() {
         label.visibility = View.VISIBLE
     }
 
+    /** No panel behind the logo: a soft shadow traced from its own shape keeps it readable over a bright frame. */
+    private fun withShadow(logo: android.graphics.Bitmap): android.graphics.Bitmap {
+        val blur = dp(10)
+        val out = android.graphics.Bitmap.createBitmap(logo.width + blur * 2, logo.height + blur * 2, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        val shadow = android.graphics.Paint().apply {
+            color = Color.BLACK; alpha = 170; maskFilter = android.graphics.BlurMaskFilter(blur.toFloat(), android.graphics.BlurMaskFilter.Blur.NORMAL)
+        }
+        canvas.drawBitmap(logo.extractAlpha(), blur.toFloat(), blur.toFloat() + dp(2), shadow)
+        canvas.drawBitmap(logo, blur.toFloat(), blur.toFloat(), null)
+        return out
+    }
+
+    private fun updatePauseLogo() {
+        if (!::pauseLogo.isInitialized) return
+        val exo = player
+        val show = exo != null && pauseLogoArt.drawable != null && exo.playbackState == Player.STATE_READY && !exo.playWhenReady &&
+            !seekPreview.active && splash.visibility != View.VISIBLE && InAppPlaybackSession.error == null
+        if (show == (pauseLogo.visibility == View.VISIBLE && pauseLogo.alpha > 0f && pauseLogo.tag != "hiding")) return
+        pauseLogo.animate().cancel()
+        if (show) {
+            pauseLogo.tag = null; pauseLogo.visibility = View.VISIBLE
+            pauseLogo.animate().alpha(1f).setDuration(260).start()
+        } else {
+            pauseLogo.tag = "hiding"
+            pauseLogo.animate().alpha(0f).setDuration(160).withEndAction { pauseLogo.visibility = View.GONE; pauseLogo.tag = null }.start()
+        }
+    }
+
     private fun updateControls() {
         updateSplash()
+        updatePauseLogo()
         updateEndTime()
         if (player?.playbackState == Player.STATE_READY) cachedLinkAttempt = false
         view.findViewById<TextView>(R.id.pov_playback_title).text = InAppPlaybackSession.title.ifBlank { "Now playing" }
@@ -505,7 +549,14 @@ class PlayerActivity : Activity() {
     }
 
     @Suppress("DEPRECATION")
-    override fun onBackPressed() { if (seekPreview.active) finishSeek(cancelled = true) else finish() }
+    override fun onBackPressed() {
+        when {
+            seekPreview.active -> finishSeek(cancelled = true)
+            // Back first tucks the controls away; a second Back leaves for the mini player.
+            view.isControllerFullyVisible -> controls.dismiss()
+            else -> finish()
+        }
+    }
 
     @Suppress("DEPRECATION")
     override fun finish() {

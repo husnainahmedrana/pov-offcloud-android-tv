@@ -35,6 +35,7 @@ internal object PlayerControlVisibility {
             stop()
             view.setControllerVisibilityListener(null as PlayerView.ControllerVisibilityListener?)
         }
+        fun dismiss() { handler.removeCallbacks(hide); view.hideController() }
         fun show() { lastInteractionAt = SystemClock.elapsedRealtime(); view.showController(); schedule() }
         fun userInteraction() {
             if (view.isControllerFullyVisible) { lastInteractionAt = SystemClock.elapsedRealtime(); schedule() }
