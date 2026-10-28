@@ -212,9 +212,9 @@ class PlayerActivity : Activity() {
     private fun loadSplashImage(address: String, done: (android.graphics.Bitmap) -> Unit) {
         Thread {
             try {
-                val connection = java.net.URL(address).openConnection() as javax.net.ssl.HttpsURLConnection
-                connection.connectTimeout = 10_000; connection.readTimeout = 10_000
-                val bitmap = try { connection.inputStream.use(BitmapFactory::decodeStream) } finally { connection.disconnect() }
+                ArtworkClient.init(applicationContext)
+                val bytes = ArtworkClient.bytes(address)
+                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (bitmap != null) runOnUiThread { if (!isDestroyed) done(bitmap) }
             } catch (_: Exception) { /* The title text remains on the splash. */ }
         }.start()

@@ -12,8 +12,8 @@ android {
         applicationId = "dev.pov.tv.rajput"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.2.20-rajput"
+        versionCode = 27
+        versionName = "0.2.21-rajput"
         testInstrumentationRunner = providers.gradleProperty("povTestRunner")
             .orElse("dev.pov.tv.PlaybackAuditInstrumentation").get()
     }
@@ -57,6 +57,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-dash:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("androidx.media3:media3-session:1.11.1")
+    // Artwork only: HTTP/2 shares one connection per image server, with a disk cache for posters.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16")
 }

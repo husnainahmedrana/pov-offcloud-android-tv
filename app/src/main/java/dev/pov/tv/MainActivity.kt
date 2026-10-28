@@ -25,11 +25,9 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.*
 import dev.pov.tv.data.*
-import java.net.URL
 import kotlin.math.roundToInt
 import java.util.Calendar
 import java.util.concurrent.Executors
-import javax.net.ssl.HttpsURLConnection
 
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 class MainActivity : Activity() {
@@ -65,7 +63,7 @@ class MainActivity : Activity() {
     }
     private var imageOrder = 0L
     // Artwork servers answer slowly but in parallel, so a screen of posters loads several at a time.
-    private val images = java.util.concurrent.ThreadPoolExecutor(6, 6, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+    private val images = java.util.concurrent.ThreadPoolExecutor(8, 8, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
         java.util.concurrent.PriorityBlockingQueue<Runnable>(), backgroundThreads)
     // Feature artwork never waits behind a page full of shelf thumbnails.
     private val featureImages = Executors.newFixedThreadPool(2, backgroundThreads)
@@ -125,11 +123,11 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Posters and backdrops are kept on disk (their servers allow months of caching), so a relaunch shows
-        // them from storage instead of downloading every card again. API requests opt out in Net.
-        if (android.net.http.HttpResponseCache.getInstalled() == null) runCatching {
-            android.net.http.HttpResponseCache.install(java.io.File(cacheDir, "artwork"), ARTWORK_CACHE_BYTES)
+        if (packageName.endsWith(".preview")) {
+            // Preview-only test switches: start with an empty artwork cache, and choose card image size.
+            if (intent.getBooleanExtra("clear_artwork_cache", false)) java.io.File(cacheDir, "artwork-http").deleteRecursively()
         }
+        ArtworkClient.init(this)
         val debug = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
         val sourcePreview = debug && intent.getBooleanExtra("source_choice_preview", false)
         publicPreview = debug && (intent.getBooleanExtra("public_preview", false) || sourcePreview)
@@ -552,7 +550,7 @@ class MainActivity : Activity() {
         val recent = if (publicPreview || remoteHome) emptyList() else history.continueWatching()
         // Something in progress: the feature trims so the first screen ends on a complete row.
         val compact = flix && if (remoteHome) !cachedContinueWatching().isNullOrEmpty() else recent.isNotEmpty()
-        read(id, { homeShelves() }) { shelves ->
+        fun render(shelves: List<CatalogApi.HomeShelf>) {
             val movies = shelves.first { it.title == "Popular Movies" }.items
             val series = shelves.first { it.title == "Popular Shows" }.items
             val rotation = if (flix) (0 until 10).flatMap { listOfNotNull(movies.getOrNull(it), series.getOrNull(it)) } else emptyList()
@@ -583,7 +581,36 @@ class MainActivity : Activity() {
                 if (homeMenuFocus) { homeMenuFocus = false; wantsContentFocus = false; if (navigationViews.values.none { it.hasFocus() }) openMenu() } else focusAfterRender(id)
             }
         }
+        // Home opens with the rows saved from the last visit (like Netflix and YouTube), then refreshes them quietly.
+        val revision = shelfRevision()
+        val saved = if (publicPreview || skipHomeRefresh) null else shelfCache.load(revision)
+        val refreshed = skipHomeRefresh; skipHomeRefresh = false
+        if (saved != null) {
+            render(saved); focusAfterRender(id)
+            worker.execute {
+                val fresh = try { homeShelves() } catch (_: Exception) { return@execute }
+                shelfCache.save(revision, fresh)
+                runOnUiThread {
+                    // New rows replace the saved ones only while the viewer is still at the top of Home; otherwise
+                    // they wait for the next visit, so nothing moves under a browsing viewer.
+                    if (id == generation && isHome && !isFinishing && !isDestroyed && scroller.scrollY == 0 &&
+                        !HomeShelfCache.sameRows(saved, fresh)) { pendingShelves = fresh; skipHomeRefresh = true; home() }
+                }
+            }
+        } else {
+            val ready = pendingShelves.takeIf { refreshed }; pendingShelves = null
+            if (ready != null) { render(ready); focusAfterRender(id) }
+            else read(id, { homeShelves().also { if (!publicPreview) shelfCache.save(revision, it) } }) { shelves -> render(shelves) }
+        }
     }
+
+    private val shelfCache by lazy { HomeShelfCache(java.io.File(filesDir, "home_shelves.json")) }
+    private var skipHomeRefresh = false
+    private var pendingShelves: List<CatalogApi.HomeShelf>? = null
+    /** Saved rows belong to one catalog setup: changing the TMDB key, country or theme starts fresh. */
+    private fun shelfRevision() = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(listOf(theme.id, store.get(TMDB_KEY), tmdbRegion()).joinToString("\u0000").toByteArray())
+        .joinToString("") { "%02x".format(it.toInt() and 255) }
 
     private fun cachedContinueWatching(): List<Pair<PlaybackIdentity, Double>>? = try {
         org.json.JSONObject(store.get(CONTINUE_CACHE)).takeIf { it.optString("revision") == wetrakr.accountRevision() }?.optJSONArray("items")?.let { items ->
@@ -1659,7 +1686,6 @@ class MainActivity : Activity() {
         const val HOME_KEEP_MS = 15 * 60_000L
         const val HOME_BACKDROP_SCALE = 0.72f
         const val COMPACT_HERO_HEIGHT = 236
-        const val ARTWORK_CACHE_BYTES = 40L * 1024 * 1024
         const val RESUME_CARD_WIDTH = 300; const val RESUME_CARDS = "home.resume_cards" }
 
     private fun searchResults(query: String, filter: String = "all", cached: CatalogApi.SearchResults? = null) {
@@ -3041,7 +3067,8 @@ class MainActivity : Activity() {
             slot.addView(logo, FrameLayout.LayoutParams(-1, dp(30), Gravity.BOTTOM))
             slot.addView(name, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
             labels.addView(slot, margin(-1, -2))
-            image(logo, logoFor(item)) { loaded -> if (loaded) { logo.visibility = View.VISIBLE; name.visibility = View.INVISIBLE } }
+            // A card's logo is drawn about 60 px tall, so Metahub's 300 px logo is plenty at a quarter of the bytes.
+            image(logo, logoFor(item).replace("/logo/medium/", "/logo/small/")) { loaded -> if (loaded) { logo.visibility = View.VISIBLE; name.visibility = View.INVISIBLE } }
         } else labels.addView(name)
         val secondary = caption.ifBlank { item.year }
         if (secondary.isNotBlank() && (caption.isNotBlank() || shape == CardFormat.LANDSCAPE)) labels.addView(text(secondary, 10, 0xFFCFD8E4.toInt()), margin(-1, -2, top = 2))
@@ -3101,11 +3128,7 @@ class MainActivity : Activity() {
     }
 
     private fun fetchBitmap(address: String, targetWidth: Int): Bitmap? {
-        val connection = URL(address).openConnection() as HttpsURLConnection
-        connection.connectTimeout = 12_000; connection.readTimeout = 12_000; connection.useCaches = true
-        // Reading to the end and closing the stream (without disconnect()) returns the connection to the
-        // keep-alive pool, so the next poster skips a fresh TLS handshake with the image server.
-        val bytes = connection.inputStream.use { it.readBytes() }
+        val bytes = ArtworkClient.bytes(address)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
