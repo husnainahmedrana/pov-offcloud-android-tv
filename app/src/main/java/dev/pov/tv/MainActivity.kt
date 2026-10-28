@@ -74,6 +74,7 @@ class MainActivity : Activity() {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
     private var authorization: DeviceAuthorizationDialog? = null
+    private var apiKeyDialog: ApiKeyDialog? = null
     @Volatile private var generation = 0
     private lateinit var focusController: TvFocusController
     private val contentFocusChanged = android.view.ViewTreeObserver.OnGlobalFocusChangeListener { _, _ ->
@@ -160,7 +161,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         window.decorView.viewTreeObserver.takeIf { it.isAlive }?.removeOnGlobalFocusChangeListener(contentFocusChanged)
         currentPlaybackOptionsDialog?.dismiss(); currentPlaybackOptionsDialog = null
-        searchDialog?.dismiss(); authorization?.dismiss(); miniPlayer?.let(InAppPlaybackSession::detachPlayerView)
+        searchDialog?.dismiss(); authorization?.dismiss(); apiKeyDialog?.dismiss(); miniPlayer?.let(InAppPlaybackSession::detachPlayerView)
         InAppPlaybackSession.removeListener(playbackChanged)
         rotationHandler.removeCallbacksAndMessages(null); featureHandler.removeCallbacksAndMessages(null)
         worker.shutdownNow(); metadataWorker.shutdownNow(); images.shutdownNow(); featureImages.shutdownNow(); authWorker.shutdownNow(); bitmapCache.evictAll()
@@ -2564,9 +2565,13 @@ class MainActivity : Activity() {
             val note = if (service in LinkDebrids.CHECK_ON_PLAY) " Links are checked when you play: the first cached one of the top ${LinkDebrids.CHECK_LIMIT} plays." else ""
             settingsRow(services, name, if (on) "Connected" else "Not connected",
                 (if (on) "Select to replace the API key." else "Connect with your $name API key.") + note, status = on) {
-                inputSetting("$name API key", "Paste your $name API key", "", true) { key ->
-                    load(generation, { linkDebrids.setKey(service, key) }) { toast("$name connected"); refreshSettings() }
-                }
+                apiKeyDialog?.dismiss()
+                apiKeyDialog = ApiKeyDialog(this, name, worker,
+                    save = { key, cancelled -> linkDebrids.setKey(service, key, cancelled) },
+                    onConnected = {
+                        toast("$name connected")
+                        if (destination == "settings") refreshSettings()
+                    }).also { it.show() }
             }
         }
         settingsRow(services, "Debrid priority", DebridServices.priority(store).joinToString(" → ") { DebridServices.name(it) },
@@ -2846,35 +2851,6 @@ class MainActivity : Activity() {
 
     private fun hideKeyboard(field: View) =
         (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(field.windowToken, 0)
-
-    /**
-     * TV keyboards: Enter on the last field presses the dialog's main action and earlier fields advance;
-     * Back closes the keyboard and moves focus to that action, so nobody has to walk past Cancel.
-     */
-    private fun AlertDialog.submitOnEnter(vararg fields: TvEditText): AlertDialog {
-        val positive = getButton(android.content.DialogInterface.BUTTON_POSITIVE)
-        fields.forEachIndexed { index, field ->
-            val last = index == fields.lastIndex
-            field.imeOptions = if (last) android.view.inputmethod.EditorInfo.IME_ACTION_DONE else android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
-            fun advance(): Boolean {
-                hideKeyboard(field)
-                if (last) positive?.let { it.requestFocus(); it.performClick() } else fields[index + 1].requestFocus()
-                return true
-            }
-            field.setOnEditorActionListener { _, action, event ->
-                when {
-                    action != android.view.inputmethod.EditorInfo.IME_NULL -> advance()
-                    event?.keyCode in setOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER) -> { if (event?.action == KeyEvent.ACTION_UP) advance(); true }
-                    else -> false
-                }
-            }
-            field.setOnKeyListener { _, key, event ->
-                if (key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER) { if (event.action == KeyEvent.ACTION_UP) advance(); true } else false
-            }
-            field.onBack = { hideKeyboard(field); positive?.requestFocus() }
-        }
-        return this
-    }
 
     private fun <T> read(id: Int, work: () -> T, done: (T) -> Unit) = load(id, work, readOnly = true, done = done)
 

@@ -24,11 +24,13 @@ class LinkDebrids internal constructor(
 
     fun connected(service: String) = keyFor(service).isNotBlank()
 
-    fun setKey(service: String, value: String) {
+    fun setKey(service: String, value: String, cancelled: () -> Boolean = { false }) {
+        if (cancelled()) return
         require(service in IDS)
         val key = value.trim()
         require(key.length in 8..512 && key.none { it.isWhitespace() || it.isISOControl() }) { "Enter your ${DebridServices.name(service)} API key." }
         check(validate(service, key)) { "${DebridServices.name(service)} could not validate this API key." }
+        if (cancelled()) return
         saveKey(service, key)
     }
 

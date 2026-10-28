@@ -17,17 +17,73 @@ class LinkDebridsTest {
     /** Answers by URL prefix and records every request. */
     private class Fake(val answers: Map<String, String>) : LinkTransport {
         val calls = mutableListOf<String>()
+        var getHeaders = emptyMap<String, String>()
+        var failure: ApiException? = null
+        var onGet: () -> Unit = {}
         private fun answer(method: String, url: String): String {
             calls += "$method $url"
             return answers.entries.firstOrNull { (prefix, _) -> "$method $url".startsWith(prefix) }?.value ?: "{}"
         }
-        override fun get(url: String, headers: Map<String, String>) = answer("GET", url)
+        override fun get(url: String, headers: Map<String, String>): String {
+            getHeaders = headers
+            onGet()
+            failure?.let { throw it }
+            return answer("GET", url)
+        }
         override fun delete(url: String, headers: Map<String, String>) = answer("DELETE", url)
         override fun form(method: String, url: String, headers: Map<String, String>, fields: List<Pair<String, String>>) = answer(method, url)
         override fun json(method: String, url: String, headers: Map<String, String>, body: JSONObject) = answer(method, url)
     }
 
     private fun api(fake: Fake) = LinkDebrids({ "key-12345678" }, { _, _ -> }, fake, now = { 0L }, pause = {})
+
+    @Test fun `pasted real-debrid key is trimmed validated saved and connected on reload`() {
+        val credentials = mutableMapOf<String, String>()
+        val fake = Fake(mapOf("GET https://api.real-debrid.com/rest/1.0/user" to """{"id":123,"username":"test"}"""))
+        fun client() = LinkDebrids({ credentials[it].orEmpty() }, { id, key -> credentials[id] = key }, fake)
+        assertFalse(client().connected("realdebrid"))
+        client().setKey("realdebrid", " \nsynthetic-test-key\r\n ")
+        assertEquals(mapOf("Authorization" to "Bearer synthetic-test-key"), fake.getHeaders)
+        assertEquals("synthetic-test-key", credentials["realdebrid"])
+        assertTrue(client().connected("realdebrid"))
+        assertEquals(listOf("GET https://api.real-debrid.com/rest/1.0/user"), fake.calls)
+    }
+
+    @Test fun `failed validation never replaces a saved key`() {
+        var saved = "previous-test-key"
+        val client = LinkDebrids({ saved }, { _, key -> saved = key }, Fake(emptyMap()))
+        assertThrows(IllegalStateException::class.java) { client.setKey("realdebrid", "replacement-test-key") }
+        assertEquals("previous-test-key", saved)
+    }
+
+    @Test fun `network or authorization failure never marks an unsaved key connected`() {
+        for (code in listOf(0, 401, 403, 429, 503)) {
+            var saved = ""
+            val fake = Fake(emptyMap()).apply { failure = ApiException(code, "Test failure") }
+            val client = LinkDebrids({ saved }, { _, key -> saved = key }, fake)
+            assertThrows(ApiException::class.java) { client.setKey("realdebrid", "synthetic-test-key") }
+            assertEquals("", saved)
+            assertFalse(client.connected("realdebrid"))
+        }
+    }
+
+    @Test fun `cancel during account validation preserves the previous key`() {
+        var saved = "previous-test-key"
+        var cancelled = false
+        val fake = Fake(mapOf("GET https://api.real-debrid.com/rest/1.0/user" to """{"id":123}"""))
+            .apply { onGet = { cancelled = true } }
+        val client = LinkDebrids({ saved }, { _, key -> saved = key }, fake)
+        client.setKey("realdebrid", "replacement-test-key") { cancelled }
+        assertEquals(1, fake.calls.size)
+        assertEquals("previous-test-key", saved)
+    }
+
+    @Test fun `cancelled connection never starts validation or writes credentials`() {
+        val fake = Fake(emptyMap())
+        val client = LinkDebrids({ "" }, { _, _ -> fail("Cancelled request must not save") }, fake)
+        client.setKey("realdebrid", "synthetic-test-key") { true }
+        assertTrue(fake.calls.isEmpty())
+    }
 
     @Test fun `real-debrid plays a cached torrent and keeps it`() {
         val fake = Fake(mapOf(
