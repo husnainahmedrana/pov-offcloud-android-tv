@@ -95,6 +95,7 @@ class PlayerActivity : Activity() {
         view = LayoutInflater.from(this).inflate(R.layout.pov_player, null, false) as PlayerView
         setContentView(view)
         controls = PlayerControlVisibility.bind(view)
+        controls.visibilityChanged = { updatePauseLogo() }
         configureButtons()
         seekLabel = TextView(this).apply {
             tag = "pov_seek_preview"; textSize = 30f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
@@ -286,7 +287,9 @@ class PlayerActivity : Activity() {
     private fun updatePauseLogo() {
         if (!::pauseLogo.isInitialized) return
         val exo = player
-        val show = exo != null && pauseLogoArt.drawable != null && exo.playbackState == Player.STATE_READY && !exo.playWhenReady &&
+        val show = exo != null && pauseLogoArt.drawable != null && exo.playbackState == Player.STATE_READY &&
+            // The title logo shows while paused, and also beside the controls while they are open.
+            (!exo.playWhenReady || view.isControllerFullyVisible) &&
             !seekPreview.active && splash.visibility != View.VISIBLE && InAppPlaybackSession.error == null
         if (show == (pauseLogo.visibility == View.VISIBLE && pauseLogo.alpha > 0f && pauseLogo.tag != "hiding")) return
         pauseLogo.animate().cancel()
@@ -306,6 +309,8 @@ class PlayerActivity : Activity() {
         if (player?.playbackState == Player.STATE_READY) cachedLinkAttempt = false
         view.findViewById<TextView>(R.id.pov_playback_title).text = InAppPlaybackSession.title.ifBlank { "Now playing" }
         PlaybackDebrid.bind(view, InAppPlaybackSession.debridService)
+        view.findViewById<PlayerBadgeRow>(R.id.pov_media_badges)?.show(PlayerMediaBadges.from(PlayerMediaFacts.from(
+            InAppPlaybackSession.mediaName, InAppPlaybackSession.mediaSize, player?.videoFormat, player?.audioFormat)))
         boostButton.text = when {
             boost.gainDb == 0 -> "Boost · Off"
             boost.state == VolumeBoostState.UNAVAILABLE -> "Boost · Unavailable"
@@ -349,11 +354,23 @@ class PlayerActivity : Activity() {
                     listOf(PlayerSheetChoice("Close") {}))
             }
         } }
-        val menuRows = if (type == C.TRACK_TYPE_TEXT) rows + PlayerSheetChoice("Subtitle style") { showSubtitleStyle() } else rows
+        val menuRows = if (type == C.TRACK_TYPE_TEXT) rows + PlayerSheetChoice("Subtitle sync · ${SubtitleSync.label()}") { showSubtitleSync() } +
+            PlayerSheetChoice("Subtitle style") { showSubtitleStyle() } else rows
         showSheet(title, detail, menuRows)
         activeTrackType = type
         activeTrackChoices = choices
         activeTracksLoading = loading
+    }
+
+    private fun showSubtitleSync() {
+        finishSeek(cancelled = true)
+        activeDialog?.dismiss()
+        activeTrackType = null
+        activeTrackChoices = emptyList()
+        activeTracksLoading = false
+        // Hide the controls so the subtitles stay in view while they are being moved.
+        controls.dismiss()
+        activeDialog = SubtitleSyncPicker.show(this, dismissed = { activeDialog = null; if (!stopped) controls.show() })
     }
 
     private fun showSubtitleStyle() {

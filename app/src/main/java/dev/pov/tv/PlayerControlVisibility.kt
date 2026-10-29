@@ -20,11 +20,15 @@ internal object PlayerControlVisibility {
             if (active && shouldAutoHide()) view.hideController()
         }
 
+        /** Called after the controls appear or hide. */
+        var visibilityChanged: (() -> Unit)? = null
+
         init {
             view.setControllerAnimationEnabled(false)
             view.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
             view.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                 if (visibility == View.VISIBLE) schedule() else handler.removeCallbacks(hide)
+                visibilityChanged?.invoke()
             })
             refreshPlaybackState()
         }

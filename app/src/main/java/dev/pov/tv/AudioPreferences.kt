@@ -12,12 +12,17 @@ internal class AudioPreferences(context: Context) {
         get() = preferences.getString("language", "en").orEmpty().takeIf { value -> LANGUAGES.any { it.first == value } }.orEmpty()
         set(value) { require(LANGUAGES.any { it.first == value }); preferences.edit().putString("language", value).apply() }
     val languageLabel: String get() = LANGUAGES.first { it.first == language }.second
+    /** When a video lacks the preferred audio or subtitle language, English is tried before the player's default. */
+    var englishFallback: Boolean
+        get() = preferences.getBoolean("english_fallback", true)
+        set(value) { preferences.edit().putBoolean("english_fallback", value).apply() }
+    fun withFallback(code: String): Array<String> = (listOf(code) + if (englishFallback) listOf("en") else emptyList()).distinct().toTypedArray()
 
     fun trackParameters(current: TrackSelectionParameters): TrackSelectionParameters {
         val builder = current.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO)
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
         return if (language.isEmpty()) builder.setPreferredAudioLanguages().build()
-        else builder.setPreferredAudioLanguage(language).build()
+        else builder.setPreferredAudioLanguages(*withFallback(language)).build()
     }
 
     companion object {

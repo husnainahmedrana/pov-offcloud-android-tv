@@ -103,6 +103,12 @@ class MainActivity : Activity() {
     private val catalogOffsets = mutableMapOf<String, ArrayDeque<Int>>()
     private var resolvingGeneration: Int? = null
     private var launchingPlayer = false
+    /** Release text and size of the link about to play; the chosen file's name is added once it is known. */
+    private var playingSourceText = ""
+    private var playingMedia: Pair<String, Long?>? = null
+    private fun mediaFile(name: String, size: Long?) {
+        playingMedia = listOf(name, playingSourceText).filter { it.isNotBlank() }.distinct().joinToString(" · ") to size?.takeIf { it > 0 }
+    }
     private val backStack = ArrayDeque<NavigationSnapshot>()
     private var current: () -> Unit = { home() }
     private val remoteProgress = mutableMapOf<String, Double>()
@@ -2025,7 +2031,8 @@ class MainActivity : Activity() {
         // Sources taller than this TV can decode (such as 8K on a 4K TV) go last and are never auto-played.
         val limit = DecoderLimits.maxHeight()
         fun tooTall(source: SourceItem) = (source.qualityHeight ?: 0) > limit
-        val ordered = sorting.order.sorted(sources.distinctBy(TvChoiceKeys::source)).let { all -> all.filterNot(::tooTall) + all.filter(::tooTall) }
+        val languages = sorting.languages
+        val ordered = sources.distinctBy(TvChoiceKeys::source).let { unique -> languages?.sorted(unique, sorting.order) ?: sorting.order.sorted(unique) }.let { all -> all.filterNot(::tooTall) + all.filter(::tooTall) }
         ordered.forEach { source ->
             val cachedOn = source.cachedServices.map(DebridServices::name)
             val status = when {
@@ -2037,7 +2044,7 @@ class MainActivity : Activity() {
             }
             val limitNote = if (tooTall(source)) " · ABOVE THIS TV'S ${DecoderLimits.label(limit)} LIMIT" else ""
             choices.addChoice(TvChoiceRow(this, TvChoiceKeys.source(source), source.title, source.detail,
-                "$status$limitNote · ${source.provider}", theme.palette, SourceBadges.from(source)) {
+                "$status$limitNote · ${source.provider}", theme.palette, SourceBadges.from(source, languages)) {
                 if (!source.cached && source.directUrl.isEmpty()) {
                     if (checkOnPlay.isNotEmpty()) resolveFirstCached(ordered.dropWhile { it !== source }.filterNot(::tooTall), identity, source)
                     else offerTransfer(source, identity)
@@ -2072,6 +2079,7 @@ class MainActivity : Activity() {
      */
     private fun resolveFirstCached(candidates: List<SourceItem>, identity: PlaybackIdentity, picked: SourceItem?) {
         if (resolvingGeneration == generation || launchingPlayer) { toast("Preparing the selected source…"); return }
+        playingSourceText = ""; playingMedia = null
         val request = generation; resolvingGeneration = request
         val progress = text("Checking links…", 14, accent); body.addView(progress, margin(-1, -2, top = 14))
         worker.execute {
@@ -2116,6 +2124,7 @@ class MainActivity : Activity() {
     }
 
     private fun playLinkFile(prepared: PreparedSource.Links, file: DebridFile) {
+        mediaFile(file.name, file.size)
         val identity = prepared.identity
         val request = generation
         worker.execute {
@@ -2129,6 +2138,7 @@ class MainActivity : Activity() {
 
     private fun resolve(source: SourceItem, identity: PlaybackIdentity) {
         if (resolvingGeneration == generation || launchingPlayer) { toast("Preparing the selected source…"); return }
+        playingSourceText = "${source.title} · ${source.detail}"; playingMedia = playingSourceText to source.sizeBytes
         val request = generation; resolvingGeneration = request
         val progress = text("Preparing your video…", 14, accent); body.addView(progress, margin(-1, -2, top = 14))
         worker.execute {
@@ -2184,6 +2194,7 @@ class MainActivity : Activity() {
             toast("Connect Offcloud and select the source again"); return
         }
         val identity = prepared.identity
+        mediaFile(file.name, file.size)
         play(file.url, identity.title, identity, "media:${identity.imdbId}:${identity.season}:${identity.episode}", "offcloud")
     }
 
@@ -2205,6 +2216,7 @@ class MainActivity : Activity() {
     }
 
     private fun playPreparedFile(prepared: PreparedSource.Files, file: CloudFile) {
+        mediaFile(file.name, file.size)
         val identity = prepared.identity
         prepared.accountTag?.let { tag ->
             if (!torbox.ownsTag(tag)) {
@@ -2446,6 +2458,7 @@ class MainActivity : Activity() {
     }
 
     private fun playCloud(folder: CloudFolder, file: CloudFile, identity: PlaybackIdentity?) {
+        playingSourceText = ""; mediaFile(file.name, file.size)
         streamFile(folder, file, file.name, identity, "cloud:${folder.kind}:${folder.id}:${file.id}")
     }
 
@@ -2479,6 +2492,8 @@ class MainActivity : Activity() {
                 .putExtra("identity", identity?.toJson()?.toString()).putExtra("key", key).putExtra("resume", history.resume(key)).putExtra("resume_percent", remotePercent)
                 .putExtra("debrid_service", PlaybackDebrid.normalize(debridService)).putExtra("cached_playback", resumeImmediately)
                 .putExtra("playback_account", LastPlayedLinks(store).scope(PlaybackDebrid.normalize(debridService)))
+                .putExtra("media_name", playingMedia?.first.orEmpty()).putExtra("media_size", playingMedia?.second ?: 0L)
+            playingMedia = null; playingSourceText = ""
             @Suppress("DEPRECATION")
             startActivityForResult(intent, PLAYBACK_REQUEST)
             @Suppress("DEPRECATION")
@@ -2613,7 +2628,7 @@ class MainActivity : Activity() {
                 if (index == languages.size) subtitleLanguage(true) else {
                     preferences.language = languages[index].first
                     InAppPlaybackSession.refreshSubtitleLanguage()
-                    settings()
+                    refreshSettings()
                 }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -2629,7 +2644,7 @@ class MainActivity : Activity() {
                 if (index == languages.size) audioLanguage(true) else {
                     preferences.language = languages[index].first
                     InAppPlaybackSession.refreshAudioLanguage()
-                    settings()
+                    refreshSettings()
                 }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -2664,7 +2679,7 @@ class MainActivity : Activity() {
 
         val playback = settingsGroup("Playback", "nowplaying")
         settingsRow(playback, "Source sorting", SourceSortPreferences(this).label,
-            "Quality first, then file size within each quality. Unknown sizes and resolutions appear last.") {
+            "Links in your audio language first (then multi-audio), then quality, then file size. Auto-play follows this order.") {
             SourceSortPreferences.show(this) { refreshSettings() }
         }
         settingsToggle(playback, "Auto-play first result", "Play starts the first cached or direct link in your sort order. The full list stays open behind it, so you can pick another link if it fails.",
@@ -2717,7 +2732,12 @@ class MainActivity : Activity() {
                 changed = { InAppPlaybackSession.refreshSubtitleStyle() }, dismissed = { refreshSettings() })
         }
         settingsRow(captions, "Subtitle language", subtitlePreferences.languageLabel, "Chosen automatically when available. You can pick another track in the player.") { subtitleLanguage() }
-        settingsRow(captions, "Audio language", AudioPreferences(this).languageLabel, "Chosen automatically when available. You can pick another track in the player.") { audioLanguage() }
+        settingsToggle(captions, "English fallback", "If a video has no audio or subtitles in your language, English is chosen instead. English links are also listed before other languages.",
+            AudioPreferences(this).englishFallback) { on ->
+            AudioPreferences(this).englishFallback = on
+            InAppPlaybackSession.refreshAudioLanguage(); InAppPlaybackSession.refreshSubtitleLanguage()
+        }
+        settingsRow(captions, "Audio language", AudioPreferences(this).languageLabel, "Chosen automatically when available, and links in this language are listed and auto-played first. You can pick another track in the player.") { audioLanguage() }
 
         val services = settingsGroup("Debrid Services", "library")
         val offcloud = OffcloudApi(store)

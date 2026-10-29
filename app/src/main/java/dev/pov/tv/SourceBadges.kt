@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import dev.pov.tv.data.SourceItem
+import dev.pov.tv.data.SourceLanguageOrder
 import dev.pov.tv.data.SourceMetadata
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -20,7 +21,7 @@ internal data class SourceBadge(val label: String, val tone: SourceBadgeTone = S
 
 /** Release-name tags are provider claims, not a probe of the selected video's capabilities. */
 internal object SourceBadges {
-    fun from(source: SourceItem): List<SourceBadge> = buildList {
+    fun from(source: SourceItem, languages: SourceLanguageOrder? = null): List<SourceBadge> = buildList {
         add(SourceBadge(SourceMetadata.qualityLabel(source.qualityHeight), when (source.qualityHeight) {
             2160, 4320 -> SourceBadgeTone.UHD
             1080 -> SourceBadgeTone.FULL_HD
@@ -49,6 +50,14 @@ internal object SourceBadges {
             has("AV1") -> tag("AV1")
             has("HEVC|[HX][ ._-]?265") -> tag("HEVC")
             has("AVC|[HX][ ._-]?264") -> tag("H.264")
+        }
+        if (languages != null) {
+            fun name(code: String) = SubtitlePreferences.LANGUAGES.firstOrNull { it.first == code }?.second?.uppercase() ?: code.uppercase()
+            when {
+                languages.audioMatch(source) -> tag(name(languages.audio))
+                languages.multiAudio(source) -> tag("MULTI AUDIO")
+            }
+            if (languages.subtitleMatch(source)) tag("${name(languages.subtitle)} SUBS")
         }
     }
 }

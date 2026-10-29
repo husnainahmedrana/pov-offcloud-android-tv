@@ -61,6 +61,9 @@ object InAppPlaybackSession {
         private set
     private var identity: PlaybackIdentity? = null
     var title: String = ""
+    /** File name/release text and size of the link being played, for the player's badges. */
+    var mediaName: String = ""
+    var mediaSize: Long? = null
         private set
     var error: PlaybackException? = null
         private set
@@ -160,6 +163,9 @@ object InAppPlaybackSession {
         lastLinkSaved = false
         debridService = PlaybackDebrid.normalize(saved?.getString("debrid_service") ?: intent.getStringExtra("debrid_service"))
         title = intent.getStringExtra("title").orEmpty()
+        if (saved == null) SubtitleSync.reset()
+        mediaName = intent.getStringExtra("media_name").orEmpty().take(4000)
+        mediaSize = intent.getLongExtra("media_size", 0L).takeIf { it > 0 }
         identity = try { intent.getStringExtra("identity")?.let { PlaybackIdentity.fromJson(JSONObject(it)) } } catch (_: Exception) { null }
         if (saved == null) { history.show(sourceKey, identity); identity?.let(wetrakr::allowPlayback) }
         val position = (saved?.getLong("position") ?: intent.getLongExtra("resume", 0L)).coerceAtLeast(0)
@@ -183,6 +189,12 @@ object InAppPlaybackSession {
                     .setEnableDecoderFallback(enableDecoderFallback).setAllowedJoiningTimeMs(allowedVideoJoiningTimeMs)
                     .setEventHandler(eventHandler).setEventListener(eventListener).setMaxDroppedFramesToNotify(50)
                 out.add(DolbyVisionVideoRenderer(builder, context, VideoCompatibilityPreferences(context).mode))
+            }
+            override fun buildTextRenderers(context: Context, output: androidx.media3.exoplayer.text.TextOutput, outputLooper: Looper,
+                extensionRendererMode: Int, out: ArrayList<androidx.media3.exoplayer.Renderer>) {
+                val built = ArrayList<androidx.media3.exoplayer.Renderer>()
+                super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, built)
+                built.mapTo(out, ::SubtitleSyncRenderer)
             }
             override fun buildAudioSink(context: Context, enableFloatOutput: Boolean,
                 enableAudioTrackPlaybackParams: Boolean): AudioSink {
@@ -367,7 +379,7 @@ object InAppPlaybackSession {
         targetView = null
         mediaSession?.release(); mediaSession = null
         exo?.release(); player = null
-        sourceUrl = ""; sourceKey = ""; title = ""; identity = null; debridService = null; playbackAccount = null; lastLinkSaved = false
+        sourceUrl = ""; sourceKey = ""; title = ""; mediaName = ""; mediaSize = null; identity = null; debridService = null; playbackAccount = null; lastLinkSaved = false
         remotePercent = 0.0; error = null
         if (notify) notifyChanged()
     }
@@ -386,6 +398,7 @@ object InAppPlaybackSession {
         val exo = player ?: return null
         return Intent(context, PlayerActivity::class.java).putExtra("reuse_session", true)
             .putExtra("url", sourceUrl).putExtra("title", title).putExtra("key", sourceKey)
+            .putExtra("media_name", mediaName).putExtra("media_size", mediaSize ?: 0L)
             .putExtra("debrid_service", debridService).putExtra("playback_account", playbackAccount)
             .putExtra("resume", exo.currentPosition).putExtra("resume_percent", remotePercent)
             .putExtra("playWhenReady", exo.playWhenReady)

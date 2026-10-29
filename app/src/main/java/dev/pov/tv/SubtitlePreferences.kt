@@ -59,7 +59,7 @@ internal class SubtitlePreferences(private val context: Context) {
                     .setSelectUndeterminedTextLanguage(defaults.selectUndeterminedTextLanguage)
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, C.TRACK_TYPE_TEXT in defaults.disabledTrackTypes).build()
             }
-            else -> builder.setPreferredTextLanguage(selected).setPreferredTextRoleFlags(0)
+            else -> builder.setPreferredTextLanguages(*AudioPreferences(context).withFallback(selected)).setPreferredTextRoleFlags(0)
                 .setSelectUndeterminedTextLanguage(false).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).build()
         }
     }

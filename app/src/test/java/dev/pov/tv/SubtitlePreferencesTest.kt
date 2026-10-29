@@ -94,7 +94,7 @@ class SubtitlePreferencesTest {
             .setPreferredAudioLanguage("de").setMaxVideoBitrate(1234567)
             .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true).build()
         val changed = preferences.trackParameters(before)
-        assertEquals(listOf("ur"), changed.preferredTextLanguages)
+        assertEquals(listOf("ur", "en"), changed.preferredTextLanguages)
         assertFalse(androidx.media3.common.C.TRACK_TYPE_TEXT in changed.disabledTrackTypes)
         assertEquals(before.preferredAudioLanguages, changed.preferredAudioLanguages)
         assertEquals(before.maxVideoBitrate, changed.maxVideoBitrate)

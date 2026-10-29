@@ -32,7 +32,7 @@ class AudioPreferencesTest {
             .setMaxVideoBitrate(1234567).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true).build()
         val changed = fresh.trackParameters(before)
-        assertEquals(listOf("hi"), changed.preferredAudioLanguages)
+        assertEquals(listOf("hi", "en"), changed.preferredAudioLanguages)
         assertFalse(C.TRACK_TYPE_AUDIO in changed.disabledTrackTypes)
         assertTrue(C.TRACK_TYPE_TEXT in changed.disabledTrackTypes)
         assertEquals(before.preferredTextLanguages, changed.preferredTextLanguages)
@@ -47,7 +47,10 @@ class AudioPreferencesTest {
         val preferences = AudioPreferences(context).apply { language = "fr" }
         val changed = preferences.trackParameters(before)
         assertEquals(setOf(text), changed.overrides.keys)
-        assertEquals(listOf("fr"), changed.preferredAudioLanguages)
+        assertEquals(listOf("fr", "en"), changed.preferredAudioLanguages)
+        preferences.englishFallback = false
+        assertEquals(listOf("fr"), preferences.trackParameters(before).preferredAudioLanguages)
+        preferences.englishFallback = true
         preferences.language = ""
         val automatic = preferences.trackParameters(changed)
         assertTrue(automatic.preferredAudioLanguages.isEmpty())

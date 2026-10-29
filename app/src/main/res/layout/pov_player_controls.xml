@@ -54,7 +54,8 @@
                 android:contentDescription="Forward 10 seconds" android:padding="10dp"
                 android:background="@drawable/pov_player_button" android:focusable="true" android:layout_marginEnd="10dp"
                 android:nextFocusUp="@id/exo_progress" />
-            <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+            <dev.pov.tv.PlayerBadgeRow android:id="@+id/pov_media_badges" android:layout_width="0dp"
+                android:layout_height="30dp" android:layout_weight="1" android:layout_marginEnd="8dp" />
             <Button android:id="@+id/pov_audio" style="@style/POVPlayerAction" android:text="Audio"
                 android:drawableStart="@drawable/pov_ic_audio" android:nextFocusUp="@id/exo_progress" />
             <Button android:id="@+id/pov_subtitles" style="@style/POVPlayerAction" android:text="Subtitles"

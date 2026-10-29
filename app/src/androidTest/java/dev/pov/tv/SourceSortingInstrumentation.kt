@@ -97,7 +97,7 @@ class SourceSortingInstrumentation : Instrumentation() {
                 render(); waitForIdleSync()
                 onMain { views(main.window.decorView).filterIsInstance<TextView>().first { it.text.startsWith("Sort ·") }.performClick() }
                 stage = "results_size_category"
-                pickDialogItem(1)
+                pickDialogItem(2)
                 stage = "results_largest_option"
                 pickDialogItem(1)
                 stage = "results_saved_order"
@@ -107,7 +107,7 @@ class SourceSortingInstrumentation : Instrumentation() {
                 stage = "settings_sort_dialog"
                 onMain { settings.invoke(main) }; waitForIdleSync()
                 onMain { views(main.window.decorView).first { it.isClickable && (it.contentDescription ?: "").startsWith("Source sorting ·") }.performClick() }
-                pickDialogItem(0)
+                pickDialogItem(1)
                 pickDialogItem(1)
                 check(onMain { SourceSortPreferences(main).order } == SourceSortOrder(false, false))
                 report.putBoolean("settings_and_results_dialogs_persist_and_apply", true)
