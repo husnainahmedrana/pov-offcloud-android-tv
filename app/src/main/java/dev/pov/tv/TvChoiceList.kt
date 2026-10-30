@@ -63,7 +63,7 @@ internal class TvChoiceRow(
     withPoster: Boolean = false,
     action: () -> Unit,
 ) : FrameLayout(context) {
-    private fun px(value: Int) = (value * resources.displayMetrics.widthPixels / 960f).roundToInt().coerceAtLeast(1)
+    private fun px(value: Int) = (value * resources.displayMetrics.widthPixels / DeviceLayout.canvasWidth.toFloat()).roundToInt().coerceAtLeast(1)
     val cardHeight = if (badges.isNotEmpty()) LayoutParams.WRAP_CONTENT else px(if (eyebrow.isBlank()) 79 else 101)
     val gap = px(9)
     private val labels = mutableListOf<TextView>()
@@ -73,7 +73,7 @@ internal class TvChoiceRow(
         tag = key
         contentDescription = (badges.map { it.label } + listOf(eyebrow, title, detail)).filter(String::isNotBlank).joinToString(". ")
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = DeviceLayout.tv
         isClickable = true
         descendantFocusability = FOCUS_BLOCK_DESCENDANTS
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -120,6 +120,10 @@ internal class TvChoiceRow(
         setOnFocusChangeListener { _, focused -> paint(focused) }
         setOnClickListener { action() }
         paint(false)
+        // Phones never focus rows, so a tap shows a ripple instead.
+        if (DeviceLayout.phone) foreground = android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x40FFFFFF), null,
+            GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = px(9).toFloat() })
     }
 }
 

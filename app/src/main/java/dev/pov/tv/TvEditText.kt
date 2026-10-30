@@ -14,7 +14,8 @@ internal class TvEditText(context: Context) : EditText(context) {
 
     override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean {
         val handler = onBack
-        if (keyCode == KeyEvent.KEYCODE_BACK && handler != null) {
+        // Phones keep the standard Back: close the keyboard, then the search or dialog.
+        if (keyCode == KeyEvent.KEYCODE_BACK && handler != null && DeviceLayout.tv) {
             if (event.action == KeyEvent.ACTION_UP) handler()
             return true
         }

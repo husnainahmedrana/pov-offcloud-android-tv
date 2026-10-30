@@ -66,6 +66,13 @@ class AnimeCatalogApi internal constructor(
     private val pages = object : LinkedHashMap<String, Cached>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Cached>?): Boolean = size > 12
     }
+    // A revisited title shows its episodes and related entries at once instead of repeating three lookups.
+    private val detailsCache = object : LinkedHashMap<String, Pair<Long, AnimeEpisodeCatalog>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, AnimeEpisodeCatalog>>?): Boolean = size > 24
+    }
+    private val relatedCache = object : LinkedHashMap<String, Pair<Long, AnimeRelated>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, AnimeRelated>>?): Boolean = size > 24
+    }
     private val resolved = object : LinkedHashMap<String, MediaItemData>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MediaItemData>?): Boolean = size > 128
     }
@@ -144,7 +151,13 @@ class AnimeCatalogApi internal constructor(
     }
 
     /** Selected-entry episode picker. Do not replace its scoped episodes with the full parent show. */
+    /** Details fetched in the last ten minutes, or null. */
+    fun cachedDetails(title: AnimeTitle): AnimeEpisodeCatalog? = synchronized(detailsCache) {
+        detailsCache["${title.type}:${title.kitsuId}"]?.takeIf { monotonicMillis() - it.first < CACHE_MILLIS }?.second
+    }
+
     fun details(title: AnimeTitle): AnimeEpisodeCatalog {
+        cachedDetails(title)?.let { return it }
         require(NUMERIC_ID.matches(title.kitsuId)) { "This anime has no supported catalog identifier." }
         require(title.type == "movie" || title.type == "series") { "This anime format is not supported for playback." }
         val payload = fetch("$MAPPING_BASE/meta/${title.type}/kitsu:${title.kitsuId}.json")
@@ -153,12 +166,15 @@ class AnimeCatalogApi internal constructor(
         check(canonical.imdbId == stub.imdbId && canonical.type == stub.type) {
             "The anime details returned a different movie or show. No episode has been selected."
         }
-        return AnimeEpisodeCatalogParser.parse(payload, title, canonical)
+        return AnimeEpisodeCatalogParser.parse(payload, title, canonical).also { result ->
+            synchronized(detailsCache) { detailsCache["${title.type}:${title.kitsuId}"] = monotonicMillis() to result }
+        }
     }
 
     /** Bounded walk of explicit sequel/prequel links; films and extras never become TV seasons. */
     fun related(title: AnimeTitle): AnimeRelated {
         require(NUMERIC_ID.matches(title.kitsuId)) { "This anime has no supported catalog identifier." }
+        synchronized(relatedCache) { relatedCache[title.kitsuId]?.let { if (monotonicMillis() - it.first < CACHE_MILLIS) return it.second } }
         val queue = ArrayDeque<AnimeTitle>().apply { add(title) }
         val visited = mutableSetOf<String>()
         val story = linkedMapOf<String, AnimeTitle>()
@@ -197,6 +213,7 @@ class AnimeCatalogApi internal constructor(
             otherSeries.values.filter { it.kitsuId !in mainIds }.sortedWith(order), truncated,
             if (truncated) "Catalog-linked titles are shown. This large relationship chain has been limited; additional related titles may be available in search."
             else "Catalog-linked seasons and story parts, movies, and extras are listed separately.")
+            .also { result -> synchronized(relatedCache) { relatedCache[title.kitsuId] = monotonicMillis() to result } }
     }
 
     private fun relationshipPage(id: String): RelatedPage {
@@ -303,8 +320,9 @@ class AnimeCatalogApi internal constructor(
             .map { it.string("title") }.filter(String::isNotBlank).distinct().take(8)
         return AnimeTitle(
             kitsuId, name, type, attributes.string("startDate").take(4).takeIf { it.matches(Regex("[12][0-9]{3}")) }.orEmpty(),
-            image(attributes.optJSONObject("posterImage")), image(attributes.optJSONObject("coverImage")),
-            attributes.string("description").ifBlank { attributes.string("synopsis") }.take(12_000), subtype,
+            // Kitsu's "large" cover is 3360 px wide; "small" (1680 px) already exceeds the 1280 px backdrop.
+            image(attributes.optJSONObject("posterImage")), image(attributes.optJSONObject("coverImage"), COVER_SIZES),
+            kitsuSynopsis(attributes.string("description").ifBlank { attributes.string("synopsis") }).take(12_000), subtype,
             listOf("Anime") + genres, uniqueId("trakt"), tvdb,
             startDate = attributes.string("startDate").takeIf { it.matches(Regex("[12][0-9]{3}-[0-9]{2}-[0-9]{2}")) }.orEmpty()
         )
@@ -345,18 +363,26 @@ class AnimeCatalogApi internal constructor(
         }
     }
 
-    private fun image(images: JSONObject?): String = listOf("large", "medium", "original", "small")
+    private fun image(images: JSONObject?, sizes: List<String> = POSTER_SIZES): String = sizes
         .map { images?.string(it).orEmpty() }.firstOrNull { value ->
             try { val uri = URI(value); uri.scheme.equals("https", true) && !uri.host.isNullOrBlank() && uri.userInfo == null }
             catch (_: Exception) { false }
         }.orEmpty()
+
+    private val POSTER_SIZES = listOf("large", "medium", "original", "small")
+    private val COVER_SIZES = listOf("small", "large", "medium", "original")
 
     private fun JSONObject.string(key: String): String = (opt(key) as? String)?.trim().orEmpty()
     private fun validateType(type: String) = require(type in setOf("all", "movie", "series", "special")) { "Choose anime series, movies, or specials and OVAs." }
     private fun unmapped(): Nothing = throw ApiException(0,
         "This anime does not have one unambiguous IMDb match. Search for its title in Movies or TV shows and choose the matching title. No episode has been guessed.")
 
-    private companion object {
+    internal companion object {
+        /** Kitsu synopses end with credit notes such as "(Source: Crunchyroll)" or "[Written by MAL Rewrite]". */
+        fun kitsuSynopsis(value: String): String = value.lines().filterNot { CREDIT_LINE.matches(it.trim()) }
+            .joinToString("\n").replace(TRAILING_CREDIT, "").replace(Regex("\n{3,}"), "\n\n").trim()
+        private val CREDIT_LINE = Regex("""[(\[]\s*(source|written by|taken from)\b[^)\]]*[)\]]\.?""", RegexOption.IGNORE_CASE)
+        private val TRAILING_CREDIT = Regex("""\s*[(\[]\s*(source|written by|taken from)\b[^)\]]*[)\]]\.?\s*$""", RegexOption.IGNORE_CASE)
         const val BASE = "https://kitsu.app/api/edge"
         const val MAPPING_BASE = "https://anime-kitsu.strem.fun"
         const val PAGE_SIZE = 20

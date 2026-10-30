@@ -77,8 +77,9 @@ jobs:
               echo '::notice::Release signing secrets are absent. Saving unsigned build artifacts; automatic release publication is skipped.'
             fi
           fi
+      # Unit tests cover the shared data layer and the TV layout and remote focus; the phone build is linted.
       - name: Unit tests and lint
-        run: gradle testDebugUnitTest lintDebug lintRelease --no-daemon --console=plain
+        run: gradle testTvDebugUnitTest lintTvDebug lintTvRelease lintMobileDebug lintMobileRelease --no-daemon --console=plain
       - name: Build debug and release APKs
         run: gradle assembleDebug assembleRelease --no-daemon --console=plain
       - name: Package APKs, license, and checksums
@@ -86,15 +87,21 @@ jobs:
           SIGNED_RELEASE: ${{ steps.signing.outputs.signed }}
         run: |
           mkdir -p dist/debug dist/release
-          cp app/build/outputs/apk/debug/app-debug.apk dist/debug/POV-Rajput-debug.apk
+          cp app/build/outputs/apk/tv/debug/app-tv-debug.apk dist/debug/POV-Rajput-TV-debug.apk
+          cp app/build/outputs/apk/mobile/debug/app-mobile-debug.apk dist/debug/POV-Rajput-Mobile-debug.apk
           if [[ "$SIGNED_RELEASE" == 'true' ]]; then
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk
-            cp app/build/outputs/apk/release/app-release.apk dist/release/POV-Rajput-release.apk
+            for flavor in tv mobile; do
+              "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "app/build/outputs/apk/$flavor/release/app-$flavor-release.apk"
+            done
+            # POV-Rajput-release.apk + update.json stay the TV app's names: installed TV builds look for them.
+            cp app/build/outputs/apk/tv/release/app-tv-release.apk dist/release/POV-Rajput-TV.apk
+            cp app/build/outputs/apk/tv/release/app-tv-release.apk dist/release/POV-Rajput-release.apk
+            cp app/build/outputs/apk/mobile/release/app-mobile-release.apk dist/release/POV-Rajput-Mobile.apk
+            python3 scripts/create-update-manifest.py dist/release/POV-Rajput-release.apk update.json dev.pov.tv.rajput
+            python3 scripts/create-update-manifest.py dist/release/POV-Rajput-Mobile.apk update-mobile.json dev.pov.rajput.mobile
           else
-            cp app/build/outputs/apk/release/app-release-unsigned.apk dist/release/POV-Rajput-release-UNSIGNED.apk
-          fi
-          if [[ "$SIGNED_RELEASE" == 'true' ]]; then
-            python3 scripts/create-update-manifest.py dist/release/POV-Rajput-release.apk
+            cp app/build/outputs/apk/tv/release/app-tv-release-unsigned.apk dist/release/POV-Rajput-TV-UNSIGNED.apk
+            cp app/build/outputs/apk/mobile/release/app-mobile-release-unsigned.apk dist/release/POV-Rajput-Mobile-UNSIGNED.apk
           fi
           cp LICENSE dist/release/LICENSE.txt
           (cd dist/release && sha256sum *.apk > SHA256SUMS.txt)

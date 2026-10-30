@@ -13,7 +13,7 @@ internal class MiniPlayerFocusRouter(private val content: ViewGroup, private val
 
     init {
         mini.isFocusable = true
-        mini.isFocusableInTouchMode = true
+        mini.isFocusableInTouchMode = DeviceLayout.tv
         mini.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
     }
 

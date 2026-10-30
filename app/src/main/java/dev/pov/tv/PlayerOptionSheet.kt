@@ -64,7 +64,7 @@ internal object PlayerOptionSheet {
                 contentDescription = choice.label + if (choice.checked) ", selected" else ""
                 textSize = 14f; isAllCaps = false; gravity = Gravity.CENTER_VERTICAL or Gravity.START
                 maxLines = 2; minHeight = dp(47); setPadding(dp(14), dp(7), dp(14), dp(7))
-                isFocusable = true; isFocusableInTouchMode = true
+                isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv
                 fun style(focused: Boolean) {
                     // Focused rows turn white with dark text; the current choice keeps a light outline.
                     setTextColor(if (focused) Color.BLACK else if (choice.selectable) Color.WHITE else 0xFF8E8E93.toInt())

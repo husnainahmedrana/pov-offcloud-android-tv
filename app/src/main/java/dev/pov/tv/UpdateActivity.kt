@@ -45,7 +45,7 @@ class UpdateActivity : Activity() {
     /** The same buttons as the Flix details page: a white main action and a translucent grey secondary one. */
     private fun button(label: String, primary: Boolean, click: () -> Unit) = TextView(this).apply {
         text = label; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; gravity = Gravity.CENTER
-        isFocusable = true; isFocusableInTouchMode = true; isClickable = true; setPadding(dp(28), 0, dp(28), 0)
+        isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; setPadding(dp(28), 0, dp(28), 0)
         val idle = if (primary) Color.argb(225, 255, 255, 255) else Color.argb(150, 109, 109, 110)
         val lit = if (primary) Color.WHITE else Color.argb(220, 140, 140, 142)
         setTextColor(if (primary) Color.BLACK else Color.WHITE)

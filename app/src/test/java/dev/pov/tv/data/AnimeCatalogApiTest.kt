@@ -208,4 +208,10 @@ class AnimeCatalogApiTest {
         assertEquals(429, assertThrows(ApiException::class.java) { busy.resolve(title) }.code)
     }
 
+    @Test
+    fun synopsisDropsKitsuCreditNotes() {
+        assertEquals("A hero rises.\n\nThe end.",
+            AnimeCatalogApi.kitsuSynopsis("A hero rises.\n\n\n\nThe end. (Source: Crunchyroll)\n\n[Written by MAL Rewrite]"))
+        assertEquals("Keeps (sources of power) in the story.", AnimeCatalogApi.kitsuSynopsis("Keeps (sources of power) in the story."))
+    }
 }

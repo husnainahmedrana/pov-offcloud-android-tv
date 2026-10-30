@@ -14,10 +14,10 @@ import java.net.URL
 class GitHubUpdatesTest {
     private val tag = "v0.2.6-rajput"
     private fun release() = JSONObject().put("tag_name", tag).put("body", "Release notes")
-        .put("assets", JSONArray().put(asset("POV-Rajput-release.apk")).put(asset("update.json")))
+        .put("assets", JSONArray().put(asset(GitHubUpdates.APK_ASSET)).put(asset(GitHubUpdates.MANIFEST_ASSET)))
     private fun asset(name: String) = JSONObject().put("name", name).put("state", "uploaded").put("size", 100)
         .put("browser_download_url", "https://github.com/${GitHubUpdates.REPOSITORY}/releases/download/$tag/$name")
-    private fun manifest() = JSONObject().put("schema", 1).put("packageName", "dev.pov.tv.rajput")
+    private fun manifest() = JSONObject().put("schema", 1).put("packageName", GitHubUpdates.UPDATE_PACKAGE)
         .put("versionCode", 12).put("versionName", "0.2.6-rajput").put("sha256", "a".repeat(64))
     private fun rejects(action: () -> Unit) { try { action(); fail("Unsafe update accepted") } catch (_: IllegalStateException) {} }
 
@@ -46,7 +46,7 @@ class GitHubUpdatesTest {
         enormous.getJSONArray("assets").getJSONObject(0).put("size", Long.MAX_VALUE)
         rejects { GitHubUpdates.candidate(enormous) }
         val duplicate = release()
-        duplicate.getJSONArray("assets").put(asset("POV-Rajput-release.apk"))
+        duplicate.getJSONArray("assets").put(asset(GitHubUpdates.APK_ASSET))
         assertNull(GitHubUpdates.candidate(duplicate))
     }
     @Test fun `download redirects permit only secure GitHub asset hosts`() {

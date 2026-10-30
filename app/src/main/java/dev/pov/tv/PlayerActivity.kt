@@ -45,6 +45,7 @@ class PlayerActivity : Activity() {
     private val boost get() = InAppPlaybackSession.volumeBoost
     private val accent by lazy { ThemePreferences(this).selected().palette.accent }
     private var stopped = false
+    private var gestures: PhonePlayerGestures? = null
     private val seekPreview = DpadSeekPreview()
     private var seekKey = KeyEvent.KEYCODE_UNKNOWN
     private var resumeAfterSeek = false
@@ -105,6 +106,15 @@ class PlayerActivity : Activity() {
         }
         requireNotNull(view.overlayFrameLayout).addView(seekLabel,
             FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        if (DeviceLayout.phone) {
+            // A view focusable in touch mode spends a tap on taking focus, so taps never reached the
+            // controls toggle; on the phone every tap shows or hides them.
+            view.isFocusableInTouchMode = false
+            PhonePlayerGestures.fullBleed(this)
+            // The seek bar and buttons sit in the lower part of the controls; touches there stay theirs.
+            gestures = PhonePlayerGestures(this, view, seekLabel, { player },
+                overControls = { y -> view.isControllerFullyVisible && y > view.height * 0.6f }, showControls = { controls.show() })
+        }
         buildSplash()
         openCurtain()
         val reuse = InAppPlaybackSession.hasActive() &&
@@ -124,7 +134,7 @@ class PlayerActivity : Activity() {
         rowIds.forEachIndexed { index, id ->
             val button = view.findViewById<View>(id)
             button.isFocusable = true
-            button.isFocusableInTouchMode = true
+            button.isFocusableInTouchMode = DeviceLayout.tv
             button.nextFocusUpId = androidx.media3.ui.R.id.exo_progress
             button.nextFocusLeftId = rowIds[(index - 1).coerceAtLeast(0)]
             button.nextFocusRightId = rowIds[(index + 1).coerceAtMost(rowIds.lastIndex)]
@@ -508,6 +518,12 @@ class PlayerActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) finishSeek(cancelled = true, restorePlayback = false)
+    }
+
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) controls.userInteraction()
+        if (activeDialog?.isShowing != true && gestures?.onTouch(event) == true) return true
+        return super.dispatchTouchEvent(event)
     }
 
     // Holding Back leaves the player for Settings; the video keeps its mini-player session.

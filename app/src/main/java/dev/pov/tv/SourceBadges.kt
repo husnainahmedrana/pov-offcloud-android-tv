@@ -64,7 +64,7 @@ internal object SourceBadges {
 
 /** Wrap chips instead of clipping metadata or introducing a second remote focus target. */
 internal class SourceBadgeStrip(context: Context, badges: List<SourceBadge>) : ViewGroup(context) {
-    private fun px(value: Int) = (value * resources.displayMetrics.widthPixels / 960f).roundToInt().coerceAtLeast(1)
+    private fun px(value: Int) = (value * resources.displayMetrics.widthPixels / DeviceLayout.canvasWidth.toFloat()).roundToInt().coerceAtLeast(1)
     private val gap = px(6)
     init {
         isFocusable = false

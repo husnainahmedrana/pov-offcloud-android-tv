@@ -27,7 +27,9 @@ internal object PlayerControlVisibility {
             view.setControllerAnimationEnabled(false)
             view.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
             view.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
-                if (visibility == View.VISIBLE) schedule() else handler.removeCallbacks(hide)
+                // Controls opened by a tap count as an interaction; the timeout runs from now, not the last key.
+                if (visibility == View.VISIBLE) { lastInteractionAt = SystemClock.elapsedRealtime(); schedule() }
+                else handler.removeCallbacks(hide)
                 visibilityChanged?.invoke()
             })
             refreshPlaybackState()
@@ -41,6 +43,7 @@ internal object PlayerControlVisibility {
         }
         fun dismiss() { handler.removeCallbacks(hide); view.hideController() }
         fun show() { lastInteractionAt = SystemClock.elapsedRealtime(); view.showController(); schedule() }
+        /** Any key, or a touch on the phone, keeps open controls up for another full timeout. */
         fun userInteraction() {
             if (view.isControllerFullyVisible) { lastInteractionAt = SystemClock.elapsedRealtime(); schedule() }
         }

@@ -12,10 +12,33 @@ android {
         applicationId = "dev.pov.tv.rajput"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "0.2.26-rajput"
+        versionCode = 33
+        versionName = "0.3.0-rajput"
         testInstrumentationRunner = providers.gradleProperty("povTestRunner")
             .orElse("dev.pov.tv.PlaybackAuditInstrumentation").get()
+    }
+    buildFeatures { buildConfig = true }
+    // One codebase, two APKs: the TV app keeps its package (existing installs update in place),
+    // the phone app is a separate install with its own release asset and update manifest.
+    flavorDimensions += "device"
+    productFlavors {
+        create("tv") {
+            dimension = "device"
+            buildConfigField("boolean", "MOBILE", "false")
+            buildConfigField("String", "UPDATE_APK", "\"POV-Rajput-release.apk\"")
+            buildConfigField("String", "UPDATE_MANIFEST", "\"update.json\"")
+            buildConfigField("String", "UPDATE_PACKAGE", "\"dev.pov.tv.rajput\"")
+            manifestPlaceholders += mapOf("mainOrientation" to "landscape", "playerOrientation" to "landscape")
+        }
+        create("mobile") {
+            dimension = "device"
+            applicationId = "dev.pov.rajput.mobile"
+            buildConfigField("boolean", "MOBILE", "true")
+            buildConfigField("String", "UPDATE_APK", "\"POV-Rajput-Mobile.apk\"")
+            buildConfigField("String", "UPDATE_MANIFEST", "\"update-mobile.json\"")
+            buildConfigField("String", "UPDATE_PACKAGE", "\"dev.pov.rajput.mobile\"")
+            manifestPlaceholders += mapOf("mainOrientation" to "portrait", "playerOrientation" to "sensorLandscape")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

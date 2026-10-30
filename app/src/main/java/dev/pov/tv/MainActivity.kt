@@ -137,7 +137,8 @@ class MainActivity : Activity() {
         val debug = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
         val sourcePreview = debug && intent.getBooleanExtra("source_choice_preview", false)
         publicPreview = debug && (intent.getBooleanExtra("public_preview", false) || sourcePreview)
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        if (DeviceLayout.tv) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        else { window.statusBarColor = 0xFF141414.toInt(); window.navigationBarColor = PHONE_BAR_COLOR }
         store = SecureStore(this); torbox = TorBoxApi(store); wetrakr = WeTrakrApi(store); wetrakrOutbox = PlaybackStore(this, "wetrakr.pending")
         resolver = SourceResolver(store, torbox); history = PlaybackStore(this)
         themePreferences = ThemePreferences(this); theme = themePreferences.selected()
@@ -178,8 +179,9 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
     @Deprecated("Android TV Back handling") override fun onBackPressed() {
+        if (DeviceLayout.phone && backStack.isEmpty() && destination != "home") { openDestination(destinations().first()); return }
         // Flix: content → menu → exit; other top-level pages return straight to Home.
-        if (flix && backStack.isEmpty()) {
+        if (flix && DeviceLayout.tv && backStack.isEmpty()) {
             val inMenu = navigationViews.values.any { it.hasFocus() }
             if (destination != "home") { openHomeMenu(); return }
             if (!inMenu && openMenu()) return
@@ -206,7 +208,7 @@ class MainActivity : Activity() {
     private fun showSplash() {
         val root = window.decorView as? FrameLayout ?: return
         val overlay = FrameLayout(this).apply { setBackgroundColor(0xFF141414.toInt()); isClickable = true; elevation = 100f }
-        val size = (resources.displayMetrics.widthPixels * 0.11f).roundToInt()
+        val size = (resources.displayMetrics.widthPixels * if (DeviceLayout.phone) 0.3f else 0.11f).roundToInt()
         // A neon glow in the logo's own cyan and magenta, breathing behind it.
         val glow = View(this).apply {
             background = GradientDrawable().apply {
@@ -346,6 +348,10 @@ class MainActivity : Activity() {
         Destination("wetrakr", "WeTrakr") { weTrakrPage() }, Destination("settings", "Settings") { settings() }) +
         if (!publicPreview && InAppPlaybackSession.hasActive()) listOf(Destination("nowplaying", "Now playing") { returnToVideo() }) else emptyList()
 
+    /** Status bar height on the phone (0 on TV), added to each page's top padding. */
+    private var systemTop = 0
+    private var statusScrim: View? = null
+
     private fun shell() {
         miniPlayer?.let(InAppPlaybackSession::detachPlayerView)
         miniPlayer = null; miniFrame = null; miniLabel = null; miniFocus = null
@@ -373,7 +379,9 @@ class MainActivity : Activity() {
         }
         scroller.setOnScrollChangeListener { _, _, y, _, _ ->
             // The feature copy stays pinned while rows slide beneath it.
-            if (flix) featureHero()?.translationY = y.toFloat() else heroBackdrop.translationY = -y.toFloat()
+            statusScrim?.alpha = (y / dp(40).toFloat()).coerceIn(0f, 1f)
+            // On the phone the banner and its copy scroll away with the page.
+            if (flix && DeviceLayout.tv) featureHero()?.translationY = y.toFloat() else heroBackdrop.translationY = -y.toFloat()
             body.invalidate()
         }
         val layout = theme.layout
@@ -381,8 +389,13 @@ class MainActivity : Activity() {
             leftMargin = dp(layout.railWidthDp + layout.contentInsetDp)
             rightMargin = dp(layout.contentInsetDp)
             topMargin = dp(layout.headerHeightDp)
+            if (layout.navigation == NavigationPlacement.BOTTOM_BAR) bottomMargin = dp(BOTTOM_BAR_HEIGHT)
         })
-        if (layout.navigation == NavigationPlacement.LEFT_RAIL) {
+        if (layout.navigation == NavigationPlacement.BOTTOM_BAR) {
+            val bar = LinearLayout(this).apply { setBackgroundColor(PHONE_BAR_COLOR); elevation = dp(4).toFloat() }
+            shellRoot.addView(bar, FrameLayout.LayoutParams(-1, dp(BOTTOM_BAR_HEIGHT), Gravity.BOTTOM))
+            destinations().forEach { target -> bar.addView(bottomNavigation(target), LinearLayout.LayoutParams(0, -1, 1f)) }
+        } else if (layout.navigation == NavigationPlacement.LEFT_RAIL) {
             val rail = column().apply {
                 setPadding(dp(12), dp(22), dp(1), dp(13))
                 background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(bg, withAlpha(bg, 235)))
@@ -405,6 +418,21 @@ class MainActivity : Activity() {
             header.addView(logo(), margin(45, 45, right = 22))
             destinations().forEach { target -> header.addView(navigation(target, true), LinearLayout.LayoutParams(0, dp(38), 1f)) }
         }
+        if (DeviceLayout.phone) shellRoot.setOnApplyWindowInsetsListener { root, insets ->
+            // Android 15 draws apps edge to edge: Home's banner may sit under the status bar, but page
+            // titles move below it, and the tab bar, mini player and notices stay above the gesture bar.
+            @Suppress("DEPRECATION") val top = insets.systemWindowInsetTop
+            @Suppress("DEPRECATION") val bottom = insets.systemWindowInsetBottom
+            root.setPadding(0, 0, 0, bottom)
+            statusScrim?.let { scrim -> if (scrim.layoutParams.height != top) scrim.layoutParams = scrim.layoutParams.apply { height = top } }
+            if (top != systemTop) {
+                if (!isHome) body.setPadding(body.paddingLeft, body.paddingTop + top - systemTop, body.paddingRight, body.paddingBottom)
+                systemTop = top
+            }
+            insets
+        }
+        statusScrim = if (DeviceLayout.phone) View(this).apply { setBackgroundColor(bg); alpha = 0f; elevation = dp(5).toFloat() }
+            .also { shellRoot.addView(it, FrameLayout.LayoutParams(-1, systemTop, Gravity.TOP)) } else null
         setContentView(shellRoot)
         refreshNavigation()
         if (resumed) updateMiniPlayer()
@@ -416,7 +444,7 @@ class MainActivity : Activity() {
 
     private fun navigation(target: Destination, top: Boolean): View {
         val frame = FrameLayout(this).apply {
-            isFocusable = true; isFocusableInTouchMode = true; isClickable = true; contentDescription = target.label
+            isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; contentDescription = target.label
             tag = "nav:${target.key}"
         }
         val line = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -455,18 +483,44 @@ class MainActivity : Activity() {
             frame.foreground = if (focused) FocusRingDrawable(accent, dp(7).toFloat(), true, dp(1).toFloat()) else null
         }
         frame.setOnFocusChangeListener { _, focused -> paint(focused) }
-        frame.setOnClickListener {
-            if (target.key == "search" || target.key == "nowplaying") target.screen()
-            else {
-                if (target.key != "home") retainHome()
-                destination = target.key; backStack.clear(); current = target.screen; current(); refreshNavigation()
-                // The chosen page takes focus and the menu tucks away; pages still loading claim it when ready.
-                if (flix) body.post { if (!focusController.first()) wantsContentFocus = true }
-            }
-        }
+        frame.setOnClickListener { openDestination(target) }
         navigationViews[target.key] = frame
         paint(false)
         return frame
+    }
+
+    private fun openDestination(target: Destination) {
+        if (target.key == "search" || target.key == "nowplaying") target.screen()
+        else {
+            if (target.key != "home") retainHome()
+            destination = target.key; backStack.clear(); current = target.screen; current(); refreshNavigation()
+            // The chosen page takes focus and the menu tucks away; pages still loading claim it when ready.
+            if (flix && DeviceLayout.tv) body.post { if (!focusController.first()) wantsContentFocus = true }
+        }
+    }
+
+    /** Phone navigation: an icon over a short label, the current tab in white. */
+    private fun bottomNavigation(target: Destination): View {
+        val cell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; isClickable = true
+            tag = "nav:${target.key}"; contentDescription = target.label
+            background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33FFFFFF), null, null)
+        }
+        val icon = NavigationIconView(this, target.key, muted)
+        cell.addView(icon, margin(21, 21))
+        val label = text(if (target.key == "nowplaying") "Playing" else target.label, 9, muted).apply { maxLines = 1; gravity = Gravity.CENTER }
+        cell.addView(label, margin(-2, -2, top = 3))
+        fun paint() {
+            val color = if (destination == target.key) ink else muted
+            label.setTextColor(color); icon.tint = color
+            label.typeface = Typeface.create("sans-serif", if (destination == target.key) Typeface.BOLD else Typeface.NORMAL)
+        }
+        // refreshNavigation() repaints every tab through this listener.
+        cell.setOnFocusChangeListener { _, _ -> paint() }
+        cell.setOnClickListener { openDestination(target) }
+        navigationViews[target.key] = cell
+        paint()
+        return cell
     }
 
     private fun refreshNavigation() {
@@ -531,9 +585,9 @@ class MainActivity : Activity() {
         heroBackdrop.animate().cancel(); heroBackdrop.alpha = 1f; heroBackdrop.scaleX = 1f; heroBackdrop.scaleY = 1f
         focusController.reset(); body.removeAllViews(); heroBackdrop.visibility = View.GONE
         body.animate().cancel(); body.alpha = 1f; body.translationY = 0f
-        body.setPadding(0, dp(if (theme.layout.navigation == NavigationPlacement.LEFT_RAIL) 63 else 15), 0, contentBottomPadding())
+        body.setPadding(0, systemTop + dp(when (theme.layout.navigation) { NavigationPlacement.LEFT_RAIL -> 63; NavigationPlacement.BOTTOM_BAR -> 16; else -> 15 }), 0, contentBottomPadding())
         scroller.scrollTo(0, 0); heroBackdrop.translationY = 0f
-        if (title.isNotBlank()) body.addView(text(title, 29, ink, true), margin(-1, -2, bottom = 5))
+        if (title.isNotBlank()) body.addView(text(title, if (DeviceLayout.phone) 24 else 29, ink, true), margin(-1, -2, bottom = 5))
         if (subtitle.isNotBlank()) body.addView(text(subtitle, 12, muted), margin(-1, -2, bottom = 18))
         return generation
     }
@@ -720,8 +774,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun hero(item: MediaItemData, showAction: Boolean = true) {
-        if (flix) { streamingHero(item, showAction); return }
+    private fun hero(item: MediaItemData, showAction: Boolean = true) = hero(item, showAction, 0)
+    private fun hero(item: MediaItemData, showAction: Boolean, synopsisLines: Int) {
+        if (flix) { streamingHero(item, showAction, synopsisLines = synopsisLines); return }
         val layout = theme.layout
         val split = layout.hero == HeroComposition.SPLIT
         val full = layout.hero == HeroComposition.FULL_BLEED
@@ -860,16 +915,20 @@ class MainActivity : Activity() {
         body.postDelayed(::reveal, 1_200)
     }
 
-    private fun streamingHero(item: MediaItemData, showAction: Boolean, rotation: List<MediaItemData> = emptyList(), compact: Boolean = false) {
+    private fun streamingHero(item: MediaItemData, showAction: Boolean, rotation: List<MediaItemData> = emptyList(), compact: Boolean = false, synopsisLines: Int = 0) {
         val layout = theme.layout
         val height = if (!showAction) 250 else if (compact) COMPACT_HERO_HEIGHT else layout.heroHeightDp
-        val frame = (if (showAction) LayoutBoundaryFrame(this) else FrameLayout(this)).apply { clipChildren = false; tag = "featured-hero"; setTag(R.id.pov_feature_item, item) }
+        val frame = (if (showAction && DeviceLayout.tv) LayoutBoundaryFrame(this) else FrameLayout(this)).apply { clipChildren = false; tag = "featured-hero"; setTag(R.id.pov_feature_item, item) }
         placeBackdrop(home = showAction)
         heroBackdrop.visibility = View.VISIBLE
         image(backdropArt, backdropFor(item), feature = true)
         // Shadowed display text is rasterized into one layer, redrawn only when the feature changes.
         val copy = column().apply { tag = "feature-copy"; setLayerType(View.LAYER_TYPE_HARDWARE, null) }
-        copy.addView(FixedSizeImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START; visibility = View.GONE }, margin(350, if (compact) 72 else 88))
+        // The phone sizes the logo to its own shape, so a wide logo leaves no empty band beneath it.
+        if (DeviceLayout.phone) copy.addView(ImageView(this).apply {
+            adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_START; visibility = View.GONE; maxWidth = dp(240); maxHeight = dp(64)
+        }, margin(-2, -2))
+        else copy.addView(FixedSizeImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START; visibility = View.GONE }, margin(350, if (compact) 72 else 88))
         copy.addView(text("", layout.titleSizeSp, ink, true).apply {
             tag = "feature-title"; typeface = Typeface.create(layout.titleTypeface, Typeface.BOLD); maxLines = 2; ellipsize = TextUtils.TruncateAt.END
             setShadowLayer(dp(8).toFloat(), 0f, dp(1).toFloat(), 0xB0000000.toInt())
@@ -877,10 +936,16 @@ class MainActivity : Activity() {
         copy.addView(text("", 12, Color.WHITE, true).apply { tag = "feature-meta" }, margin(-1, -2, top = 10))
         copy.addView(text("", 13, 0xFFE6E6E6.toInt()).apply {
             tag = "feature-description"; setLineSpacing(dp(2).toFloat(), 1f)
-            if (showAction) { maxLines = if (compact) 2 else 3; ellipsize = TextUtils.TruncateAt.END }
+            if (showAction) { maxLines = if (compact && DeviceLayout.tv) 2 else 3; ellipsize = TextUtils.TruncateAt.END }
+            else if (synopsisLines > 0) { maxLines = synopsisLines; ellipsize = TextUtils.TruncateAt.END }
             setShadowLayer(dp(4).toFloat(), 0f, 0f, 0xB0000000.toInt())
         }, margin(-1, -2, top = 8))
-        frame.addView(copy, FrameLayout.LayoutParams(dp(if (showAction) 420 else 560), -2).apply { topMargin = dp(if (!showAction) 12 else if (compact) 24 else 30) })
+        // A shortened synopsis keeps the rest one press away.
+        if (!showAction && synopsisLines > 0 && item.description.length > SYNOPSIS_MORE_CHARS) copy.addView(button("More") {
+            synopsisDialog(item.title, item.description)
+        }.apply { gravity = Gravity.CENTER }, margin(90, 34, top = 10))
+        if (DeviceLayout.phone) frame.addView(copy, FrameLayout.LayoutParams(-1, -2).apply { topMargin = dp(PHONE_COPY_TOP) })
+        else frame.addView(copy, FrameLayout.LayoutParams(dp(if (showAction) 420 else 560), -2).apply { topMargin = dp(if (!showAction) 12 else if (compact) 24 else 30) })
         if (showAction) {
             val actions = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; tag = "feature-actions"; clipChildren = false }
             // Actions follow whichever title the rotating feature currently shows.
@@ -894,18 +959,20 @@ class MainActivity : Activity() {
                     current.type == "movie" -> navigate { showSources(PlaybackIdentity(current.imdbId, current.type, current.title)) }
                     else -> navigate { details(current) }
                 }
-            }, margin(122, 38, right = 12))
-            actions.addView(button("ⓘ  More Info") { val current = shown(); navigate { details(current) } }.apply { gravity = Gravity.CENTER }, margin(136, 38, right = 12))
+            }, margin(if (DeviceLayout.phone) 108 else 122, 38, right = if (DeviceLayout.phone) 8 else 12))
+            actions.addView(button("ⓘ  More Info") { val current = shown(); navigate { details(current) } }.apply { gravity = Gravity.CENTER },
+                margin(if (DeviceLayout.phone) 124 else 136, 38, right = if (DeviceLayout.phone) 8 else 12))
             actions.addView(button("＋  My List") {
                 val item = shown()
                 val tracker = weTrakrClient()
                 if (tracker.connected()) load(generation, { tracker.setWatchlist(PlaybackIdentity(item.imdbId, item.type, item.title), true) }) { toast("Added to your ${tracker.name} watchlist") }
                 else { toast("Connect a tracker to save titles to your library"); navigate { weTrakrPage() } }
-            }.apply { gravity = Gravity.CENTER }, margin(122, 38))
-            frame.addView(actions, FrameLayout.LayoutParams(-2, dp(38), Gravity.BOTTOM or Gravity.START).apply { bottomMargin = dp(26) })
+            }.apply { gravity = Gravity.CENTER }, margin(if (DeviceLayout.phone) 108 else 122, 38))
+            if (DeviceLayout.phone) copy.addView(actions, margin(-1, 38, top = 14))
+            else frame.addView(actions, FrameLayout.LayoutParams(-2, dp(38), Gravity.BOTTOM or Gravity.START).apply { bottomMargin = dp(26) })
         }
-        // Details pages grow to fit the complete synopsis.
-        body.addView(frame, margin(-1, if (showAction) height else -2).apply { if (!showAction) bottomMargin = dp(14) })
+        // Details pages grow to fit the complete synopsis, as does the phone's Home feature.
+        body.addView(frame, margin(-1, if (showAction && DeviceLayout.tv) height else -2).apply { if (!showAction || DeviceLayout.phone) bottomMargin = dp(14) })
         renderFeature(frame, item)
         if (!showAction) {
             val meta = frame.findViewWithTag<TextView>("feature-meta")
@@ -956,7 +1023,7 @@ class MainActivity : Activity() {
         listOf(item.year, item.runtime, if (item.type == "series") "Series" else "Movie").filter(String::isNotBlank).forEach {
             row.addView(chip(it, Color.TRANSPARENT, ink, withAlpha(Color.WHITE, 90)), margin(-2, -2, right = 8))
         }
-        item.genres.take(3).forEach { row.addView(chip(it, withAlpha(Color.WHITE, 30), ink), margin(-2, -2, right = 8)) }
+        item.genres.take(if (DeviceLayout.phone) 1 else 3).forEach { row.addView(chip(it, withAlpha(Color.WHITE, 30), ink), margin(-2, -2, right = 8)) }
         return row
     }
 
@@ -976,6 +1043,13 @@ class MainActivity : Activity() {
     private fun placeBackdrop(home: Boolean) {
         if (!flix) return
         val params = heroBackdrop.layoutParams as FrameLayout.LayoutParams
+        if (DeviceLayout.phone) {
+            val height = resources.displayMetrics.widthPixels * 9 / 16
+            if (params.width != -1 || params.height != height) {
+                params.width = -1; params.height = height; params.gravity = Gravity.TOP; heroBackdrop.layoutParams = params
+            }
+            return
+        }
         val width = if (home) (resources.displayMetrics.widthPixels * HOME_BACKDROP_SCALE).toInt() else -1
         val height = if (home) width * 9 / 16 else -1
         val growsFromCorner = !home && params.width > 0
@@ -1019,7 +1093,10 @@ class MainActivity : Activity() {
         val logo = copy.getChildAt(0) as ImageView
         val title = frame.findViewWithTag<TextView>("feature-title")
         title.text = item.title
-        title.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(when { item.title.length > 30 -> 28; item.title.length > 16 -> 36; else -> theme.layout.titleSizeSp }).toFloat())
+        title.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(when {
+            item.title.length > 30 -> if (DeviceLayout.phone) 21 else 28
+            item.title.length > 16 -> if (DeviceLayout.phone) 25 else 36
+            else -> theme.layout.titleSizeSp }).toFloat())
         logo.setTag(R.id.pov_feature_item, item)
         // The logo's space is held empty while it loads; plain text appears only if there is no logo,
         // so the title never flashes as text and then swaps to artwork.
@@ -1151,15 +1228,16 @@ class MainActivity : Activity() {
         if (items.isEmpty()) return
         body.addView(text(title, theme.layout.sectionTitleSizeSp, ink, true), margin(-1, -2, top = 14, bottom = 6))
         val row = horizontalRow()
-        items.take(10).forEachIndexed { index, item -> row.addView(rankTile(item, index + 1), margin(if (index == 9) 200 else 170, 144, right = 4)) }
+        val (wide, narrow, tall) = if (DeviceLayout.phone) Triple(150, 128, 108) else Triple(200, 170, 144)
+        items.take(10).forEachIndexed { index, item -> row.addView(rankTile(item, index + 1), margin(if (index == 9) wide else narrow, tall, right = 4)) }
     }
 
     private fun rankTile(item: MediaItemData, rank: Int): View {
         val frame = FrameLayout(this).apply {
-            isFocusable = true; isFocusableInTouchMode = true; isClickable = true; clipChildren = false
+            isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; clipChildren = false
             tag = "top10:${item.type}:${item.imdbId}"; contentDescription = "Number $rank, ${item.title}"
         }
-        val posterWidth = dp(96)
+        val posterWidth = dp(if (DeviceLayout.phone) 72 else 96)
         frame.addView(RankNumberView(this, rank.toString(), bg, 0xFF8C8C8C.toInt()).apply { posterInset = posterWidth - dp(16).toFloat() }, FrameLayout.LayoutParams(-1, -1))
         val poster = FrameLayout(this).apply { background = rounded(panel, 4); clipToOutline = true }
         val art = FixedSizeImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
@@ -1172,7 +1250,7 @@ class MainActivity : Activity() {
             if (focused) scheduleFeature(item)
         }
         frame.setOnClickListener { navigate { details(item) } }
-        return frame
+        return frame.pressable(4)
     }
 
     private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
@@ -1227,7 +1305,7 @@ class MainActivity : Activity() {
     }
 
     private fun checkStartupUpdate() {
-        if (store.get("updates.startup") != "true") return
+        if (store.get("updates.startup") == "false") return  // on unless the viewer turns it off
         worker.execute {
             val latest = try { GitHubUpdates(this).latest() } catch (_: Exception) { null }
             if (latest != null) runOnUiThread {
@@ -1307,7 +1385,7 @@ class MainActivity : Activity() {
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (miniFrame == null) {
             val frame = FrameLayout(this).apply {
-                background = rounded(Color.BLACK, 8); clipToOutline = true; isFocusable = true; isFocusableInTouchMode = true; isClickable = true
+                background = rounded(Color.BLACK, 8); clipToOutline = true; isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true
                 tag = "return-to-video"; contentDescription = "Now playing. Select to return to video. Hold Select or press Menu for playback options."
             }
             val video = PlayerView(this).apply {
@@ -1321,7 +1399,7 @@ class MainActivity : Activity() {
             }
             val label = text("", 11, Color.WHITE, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
             caption.addView(label)
-            caption.addView(text("Select to return · Hold Select for options", 9, 0xFFD3DFED.toInt()).apply { maxLines = 1 })
+            caption.addView(text(if (DeviceLayout.phone) "Tap to return · Hold for options" else "Select to return · Hold Select for options", 9, 0xFFD3DFED.toInt()).apply { maxLines = 1 })
             frame.addView(caption, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
             frame.setOnFocusChangeListener { view, focused ->
                 if (focused) { pendingFocus = null; wantsContentFocus = false }
@@ -1331,7 +1409,9 @@ class MainActivity : Activity() {
             }
             frame.setOnClickListener { returnToVideo() }
             frame.setOnLongClickListener { playbackOptions(); true }
-            shellRoot.addView(frame, FrameLayout.LayoutParams(dp(247), dp(145), Gravity.BOTTOM or Gravity.END).apply {
+            if (DeviceLayout.phone) shellRoot.addView(frame, FrameLayout.LayoutParams(dp(176), dp(99), Gravity.BOTTOM or Gravity.END).apply {
+                rightMargin = dp(10); bottomMargin = dp(BOTTOM_BAR_HEIGHT + 8)
+            }) else shellRoot.addView(frame, FrameLayout.LayoutParams(dp(247), dp(145), Gravity.BOTTOM or Gravity.END).apply {
                 rightMargin = dp(20); bottomMargin = dp(15)
             })
             miniFrame = frame; miniPlayer = video; miniLabel = label
@@ -1373,12 +1453,14 @@ class MainActivity : Activity() {
             (host.getChildAt(it).tag as? String)?.startsWith("nav:") == true
         } ?: return
         val top = theme.layout.navigation == NavigationPlacement.TOP_BAR
-        val cell = navigation(Destination("nowplaying", "Now playing") { returnToVideo() }, top)
-        val params = if (top) LinearLayout.LayoutParams(0, dp(38), 1f) else margin(-1, 35, bottom = 4)
+        val bottom = theme.layout.navigation == NavigationPlacement.BOTTOM_BAR
+        val target = Destination("nowplaying", "Now playing") { returnToVideo() }
+        val cell = if (bottom) bottomNavigation(target) else navigation(target, top)
+        val params = if (bottom) LinearLayout.LayoutParams(0, -1, 1f) else if (top) LinearLayout.LayoutParams(0, dp(38), 1f) else margin(-1, 35, bottom = 4)
         host.addView(cell, lastNavigation + 1, params)
     }
 
-    private fun contentBottomPadding() = dp(if (!publicPreview && InAppPlaybackSession.hasActive()) 184 else 24)
+    private fun contentBottomPadding() = dp(if (!publicPreview && InAppPlaybackSession.hasActive()) (if (DeviceLayout.phone) 120 else 184) else 24)
 
     private fun homeCredit() {
         body.addView(text("POV Rajput  ·  Android TV port: Mark Mateo  ·  Original POV: kodifitzwell", 10, muted), margin(-1, -2, top = 20, bottom = 6))
@@ -1388,20 +1470,32 @@ class MainActivity : Activity() {
         current = { animePage(type, query, skip) }
         destination = "anime"; refreshNavigation()
         val id = page(if (query.isBlank()) "Anime" else "Anime · $query", "Discover anime series, films, and new worlds.")
-        val tabs = horizontalRow()
-        listOf("series" to "Series & seasons", "movie" to "Anime movies", "special" to "Specials & OVAs").forEach { (key, title) ->
-            tabs.addView(button(if (type == key) "●  $title" else title) { animePage(key) }, margin(153, 40, right = 8))
+        if (DeviceLayout.phone) {
+            // Phone: search first, then three short tabs that fit the width, so nothing hides off-screen.
+            body.addView(button("⌕   Search anime") { searchAnime(type) }, margin(-1, 42, bottom = 10))
+            phoneTabs(listOf("series" to "Series", "movie" to "Movies", "special" to "Specials").map { (key, title) ->
+                (if (type == key) "●  $title" else title) to { animePage(key) }
+            })
+        } else {
+            val tabs = horizontalRow()
+            // Search leads the row, wider than the category tabs.
+            tabs.addView(button("⌕   Search anime") { searchAnime(type) }, margin(230, 40, right = 16))
+            listOf("series" to "Series & seasons", "movie" to "Anime movies", "special" to "Specials & OVAs").forEach { (key, title) ->
+                tabs.addView(button(if (type == key) "●  $title" else title) { animePage(key) }, margin(153, 40, right = 8))
+            }
         }
-        tabs.addView(button("Search anime") { searchAnime(type) }, margin(140, 38, right = 8))
         read(id, { if (query.isBlank()) anime.popular(type, skip) else anime.search(query, type, skip) }) { result ->
             if (result.items.isEmpty()) body.addView(text("No anime found. Try a different title or category.", 14, muted), margin(-1, -2, top = 20))
-            val width = 960 - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
-            val count = (width / (cardWidth() + theme.layout.cardGapDp)).coerceAtLeast(1)
+            val width = DeviceLayout.canvasWidth - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
+            val count = if (DeviceLayout.phone) 2 else (width / (cardWidth() + theme.layout.cardGapDp)).coerceAtLeast(1)
+            // Flix columns stretch to the full content width, as the Movies and Shows grids do.
+            val tileWidth = if (flix) (width - 6 - (count - 1) * theme.layout.cardGapDp) / count else cardWidth()
+            val tileHeight = if (flix) tileWidth * 9 / 16 else theme.layout.cardHeightDp
             result.items.chunked(count).forEach { group ->
                 val row = LinearLayout(this).apply { tag = "media-grid-row" }; body.addView(row, margin(-1, -2, top = 14))
                 group.forEach { title ->
                     val media = MediaItemData("", title.type, title.title, title.year, title.poster, title.background, title.description, title.genres)
-                    row.addView(tile(media, caption = animeFormat(title)) { navigate { animeDetails(title) } }.apply { tag = "anime:${title.kitsuId}" }, margin(cardWidth(), theme.layout.cardHeightDp, right = theme.layout.cardGapDp))
+                    row.addView(tile(media, caption = animeFormat(title)) { navigate { animeDetails(title) } }.apply { tag = "anime:${title.kitsuId}" }, margin(tileWidth, tileHeight, right = theme.layout.cardGapDp))
                 }
             }
             val paging = horizontalRow()
@@ -1427,17 +1521,27 @@ class MainActivity : Activity() {
     private fun animeDetails(title: AnimeTitle) {
         current = { animeDetails(title) }
         val id = page(title.title, animeFormat(title))
+        if (flix) {
+            // The card's own picture shows at once (never the previous title's), then the sharp backdrop
+            // fades in while the IMDb match is still being looked up.
+            val card = MediaItemData("", title.type, title.title, title.year, title.poster, title.background, title.description, title.genres)
+            placeBackdrop(home = false); heroBackdrop.visibility = View.VISIBLE
+            backdropStandIn(card); image(backdropArt, backdropFor(card), feature = true)
+        }
         body.addView(button("Choose a matching title manually") { matchAnime(title) }, margin(280, 40, bottom = 10))
-        read(id, { anime.details(title) }) { result ->
-            body.removeAllViews(); hero(result.media, false)
-            body.addView(text(animeFormat(title) + " · " + result.notice, 12, muted), margin(-1, -2, top = 9, bottom = 12))
-            val relatedHost = column(); body.addView(relatedHost, margin(-1, -2, bottom = 12))
+        fun render(result: AnimeEpisodeCatalog) {
+            // Play sits right under the synopsis, then one row of related entries, then the episodes.
+            body.removeAllViews(); hero(result.media, false, synopsisLines = if (DeviceLayout.phone) 4 else 3)
+            mediaActions(result.media)
+            if (!flix) body.addView(text(animeFormat(title) + " · " + result.notice, 12, muted), margin(-1, -2, top = 9, bottom = 12))
+            val relatedHost = column(); body.addView(relatedHost, margin(-1, -2, top = 10))
             relatedHost.addView(text("Finding related seasons and films…", 12, muted))
             loadRelatedAnime(title, relatedHost, id)
-            mediaActions(result.media)
             if (title.type == "series") animeEpisodePicker(result)
             body.addView(button("Choose a matching title manually") { matchAnime(title) }, margin(280, 40, top = 15))
         }
+        val cached = anime.cachedDetails(title)
+        if (cached != null) { render(cached); focusAfterRender(id) } else read(id, { anime.details(title) }) { render(it) }
     }
 
     private fun loadRelatedAnime(title: AnimeTitle, host: LinearLayout, id: Int) {
@@ -1447,24 +1551,20 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (id == generation && !isDestroyed) {
                         host.removeAllViews()
-                        val row = LinearLayout(this)
-                        fun add(label: String, choices: List<AnimeTitle>, key: String) {
-                            row.addView(button("$label (${choices.size})") {
+                        // Three wide buttons: the row scrolls sideways on a phone.
+                        val row = horizontalRow(host)
+                        fun add(short: String, label: String, choices: List<AnimeTitle>, key: String) {
+                            row.addView(button("$short (${choices.size})") {
                                 if (choices.isEmpty()) toast("No catalog-linked $label are available")
                                 else AlertDialog.Builder(this).setTitle(label).setItems(choices.map { it.title }.toTypedArray()) { _, index ->
                                     navigate { animeDetails(choices[index]) }
                                 }.setNegativeButton("Cancel", null).show()
-                            }.apply { tag = "related:$key" }, margin(192, 40, right = 8))
+                            }.apply { tag = "related:$key"; gravity = Gravity.CENTER }, margin(150, 38, right = 8))
                         }
-                        add("Seasons & story parts", related.seasons, "seasons")
-                        add("Anime movies", related.movies, "movies")
-                        add("Specials & OVAs", related.specials, "specials")
-                        host.addView(row)
-                        if (related.otherSeries.isNotEmpty()) host.addView(button("Related spin-off series (${related.otherSeries.size})") {
-                            AlertDialog.Builder(this).setTitle("Spin-off series").setItems(related.otherSeries.map { it.title }.toTypedArray()) { _, index ->
-                                navigate { animeDetails(related.otherSeries[index]) }
-                            }.setNegativeButton("Cancel", null).show()
-                        }, margin(280, 38, top = 7))
+                        add("Seasons", "Seasons & story parts", related.seasons, "seasons")
+                        add("Movies", "Anime movies", related.movies, "movies")
+                        add("Specials", "Specials & OVAs", related.specials, "specials")
+                        if (related.otherSeries.isNotEmpty()) add("Spin-offs", "Spin-off series", related.otherSeries, "spinoffs")
                         if (related.truncated) host.addView(text("More related entries may be available through Anime search.", 11, muted), margin(-1, -2, top = 6))
                         focusAfterRender(id)
                     }
@@ -1502,7 +1602,7 @@ class MainActivity : Activity() {
                 }.joinToString(" · ")
                 // Flix shows each anime episode with its still, like regular series.
                 if (flix) host.addView(episodeRow(identity, EpisodeData(identity.season, identity.episode, choice.title, choice.released, choice.thumbnail),
-                    result.media, "Episode ${choice.catalogEpisode}", extra), margin(-1, 108, bottom = 8))
+                    result.media, "Episode ${choice.catalogEpisode}", extra), margin(-1, if (DeviceLayout.phone) -2 else 108, bottom = 8))
                 else host.addView(episodeButton(identity, choice.title, choice.released, extra), margin(-1, 62, bottom = 7))
             }
             focusAfterRender(generation)
@@ -1512,7 +1612,7 @@ class MainActivity : Activity() {
                 result.groups.map { "${it.title} · ${it.episodes.size} episodes" }.toTypedArray(), selectedSeasons[key] ?: 0
             ) { dialog, index -> dialog.dismiss(); render(index); selector.requestFocus() }.setNegativeButton("Cancel", null).show()
         }
-        body.addView(selector, margin(380, 42, top = 10)); body.addView(host)
+        body.addView(selector, margin(if (DeviceLayout.phone) -1 else 380, 42, top = 10)); body.addView(host)
         render(groupIndex)
     }
 
@@ -1535,13 +1635,13 @@ class MainActivity : Activity() {
         current = { appearance() }
         destination = "settings"; refreshNavigation()
         page("Appearance", "Choose your view.")
-        val width = 960 - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
+        val width = DeviceLayout.canvasWidth - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
         val tileWidth = (width - 20) / 2
         ThemeSpec.entries.chunked(2).forEach { choices ->
             val row = LinearLayout(this); body.addView(row, margin(-1, -2, bottom = 16))
             choices.forEach { choice ->
                 val tile = column().apply {
-                    isFocusable = true; isFocusableInTouchMode = true; isClickable = true; tag = "theme:${choice.id}"; contentDescription = "Apply ${choice.displayName} theme"
+                    isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; tag = "theme:${choice.id}"; contentDescription = "Apply ${choice.displayName} theme"
                     background = rounded(panel, 9); setPadding(dp(6), dp(6), dp(6), dp(10))
                 }
                 val art = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; background = rounded(panel, 6); clipToOutline = true }
@@ -1606,13 +1706,16 @@ class MainActivity : Activity() {
         card.addView(field, margin(-1, 56))
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER; clipChildren = false }
         val searchAction = primaryButton("⌕  Search") { submit() }.apply { contentDescription = "Search" }
-        actions.addView(searchAction, margin(150, 40, right = 12))
+        actions.addView(searchAction, margin(if (DeviceLayout.phone) 110 else 150, 40, right = if (DeviceLayout.phone) 8 else 12))
         input.onBack = { hideKeyboard(input); searchAction.requestFocus() }
-        actions.addView(button("🎤  Voice search") { dialog.dismiss(); voiceSearch() }.apply { gravity = Gravity.CENTER; tag = "search-voice" }, margin(170, 40, right = 12))
-        actions.addView(button("Cancel") { dialog.dismiss() }.apply { gravity = Gravity.CENTER }, margin(110, 40))
+        actions.addView(button(if (DeviceLayout.phone) "🎤  Voice" else "🎤  Voice search") { dialog.dismiss(); voiceSearch() }.apply { gravity = Gravity.CENTER; tag = "search-voice" },
+            margin(if (DeviceLayout.phone) 110 else 170, 40, right = if (DeviceLayout.phone) 8 else 12))
+        actions.addView(button("Cancel") { dialog.dismiss() }.apply { gravity = Gravity.CENTER }, margin(if (DeviceLayout.phone) 90 else 110, 40))
         card.addView(actions, margin(-2, -2, top = 22))
-        card.addView(text("Press OK to type · the keyboard's Search key searches straight away", 11, muted), margin(-2, -2, top = 18))
-        root.addView(card, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER).apply { bottomMargin = dp(60) })
+        if (DeviceLayout.tv) card.addView(text("Press OK to type · the keyboard's Search key searches straight away", 11, muted), margin(-2, -2, top = 18))
+        // The phone keeps the field near the top, clear of the on-screen keyboard.
+        if (DeviceLayout.phone) root.addView(card, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply { topMargin = dp(70); leftMargin = dp(16); rightMargin = dp(16) })
+        else root.addView(card, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER).apply { bottomMargin = dp(60) })
         dialog.setContentView(root)
         input.setOnEditorActionListener { _, action, event ->
             if (action in setOf(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH, android.view.inputmethod.EditorInfo.IME_ACTION_DONE, android.view.inputmethod.EditorInfo.IME_ACTION_GO)) { submit(); true }
@@ -1622,11 +1725,18 @@ class MainActivity : Activity() {
             } else false
         }
         input.setOnKeyListener { _, key, event ->
+            // TV: the field starts selected with the keyboard closed; OK opens it.
+            if (DeviceLayout.tv && key == KeyEvent.KEYCODE_DPAD_CENTER) {
+                if (event.action == KeyEvent.ACTION_UP) (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(input, 0)
+                return@setOnKeyListener true
+            }
             if (key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER) {
                 if (event.action == KeyEvent.ACTION_UP) submit()
                 true
             } else false
         }
+        if (DeviceLayout.phone) dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        else { input.showSoftInputOnFocus = false; dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN) }
         searchDialog = dialog; dialog.show(); input.requestFocus()
     }
     /**
@@ -1742,7 +1852,11 @@ class MainActivity : Activity() {
         const val DETAILS_KEEP_MS = 10 * 60_000L
         /** Bump when the set of Home rows changes, so rows saved under the old set are not shown. */
         const val SHELF_SET_VERSION = "2"
-        const val RESUME_CARD_WIDTH = 300; const val RESUME_CARDS = "home.resume_cards" }
+        const val RESUME_CARD_WIDTH = 300; const val RESUME_CARDS = "home.resume_cards"
+        const val SYNOPSIS_MORE_CHARS = 220
+        const val PHONE_INLINE_VALUE = 18; const val BOTTOM_BAR_HEIGHT = 56; const val PHONE_BAR_COLOR = 0xFF0B0B0B.toInt()
+        /** Where the phone's feature copy starts: over the foot of the 225-unit banner. */
+        const val PHONE_COPY_TOP = 150 }
 
     private fun searchResults(query: String, filter: String = "all", cached: CatalogApi.SearchResults? = null) {
         current = { searchResults(query, filter, cached) }
@@ -1775,7 +1889,8 @@ class MainActivity : Activity() {
         fun render(id: Int, result: MediaItemData) {
             body.removeAllViews(); hero(result, false); mediaActions(result, episode)
             if (result.type == "series") { seasonPicker(result); if (flix) body.post { if (id == generation) riseIn() } }
-            else if (flix) alignToBottom(id, reveal = ::riseIn)
+            else if (flix && DeviceLayout.tv) alignToBottom(id, reveal = ::riseIn)
+            else if (flix) body.post { if (id == generation) riseIn() }
         }
         // Details fetched while the poster had focus (or opened recently) show at once.
         cachedDetails(item)?.let { result -> val id = page(""); backdropStandIn(item, result); render(id, result); focusAfterRender(id); return }
@@ -1853,7 +1968,7 @@ class MainActivity : Activity() {
         }
         // The flix details page already shows the full synopsis.
         if (result.description.isNotBlank() && !flix) actions.addView(button("Synopsis") {
-            AlertDialog.Builder(this).setTitle(result.title).setMessage(result.description).setPositiveButton("Close", null).show()
+            synopsisDialog(result.title, result.description)
         }, margin(110, 44, right = 8))
         val tracker = weTrakrClient()
         if (tracker.connected()) {
@@ -1915,7 +2030,7 @@ class MainActivity : Activity() {
             val row = horizontalRow()
             seasons.forEach { season ->
                 val tab = text(if (season == 0) "Specials" else "Season $season", 13, ink, true).apply {
-                    gravity = Gravity.CENTER; setPadding(dp(18), 0, dp(18), 0); isFocusable = true; isFocusableInTouchMode = true; isClickable = true
+                    gravity = Gravity.CENTER; setPadding(dp(18), 0, dp(18), 0); isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true
                     tag = "season:${result.imdbId}:$season"; contentDescription = text
                 }
                 tab.setOnFocusChangeListener { view, focused -> paintSeasonTab(tab, selectedSeasons[result.imdbId] == season, focused)
@@ -1948,8 +2063,8 @@ class MainActivity : Activity() {
         val number = label.ifBlank { if (identity.season == 0) "Special ${identity.episode}" else "Episode ${identity.episode}" }
         val detail = if (future) "Not yet released" else note.ifBlank { episode.released.take(10) }
         val row = LinearLayout(this).apply {
-            gravity = Gravity.TOP; minimumHeight = dp(107); setPadding(dp(6), dp(6), dp(12), dp(6)); background = rounded(withAlpha(Color.WHITE, 14), 6)
-            isFocusable = true; isFocusableInTouchMode = true; isClickable = true
+            gravity = Gravity.TOP; minimumHeight = dp(if (DeviceLayout.phone) 80 else 107); setPadding(dp(6), dp(6), dp(12), dp(6)); background = rounded(withAlpha(Color.WHITE, 14), 6)
+            isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true
             tag = "episode:${identity.imdbId}:${identity.season}:${identity.episode}"
             contentDescription = "$number. ${episode.title}. $detail"
         }
@@ -1959,8 +2074,9 @@ class MainActivity : Activity() {
         // Stills use the priority pool so they never queue behind the Home page's thumbnails.
         image(art, episode.thumbnail.ifBlank { backdropFor(show) }, feature = true)
         if (future) still.addView(View(this).apply { setBackgroundColor(0x99000000.toInt()) }, FrameLayout.LayoutParams(-1, -1))
-        row.addView(still, LinearLayout.LayoutParams(dp(168), dp(95)))
-        val copy = column().apply { setPadding(dp(14), dp(2), 0, 0) }
+        if (DeviceLayout.phone) row.addView(still, LinearLayout.LayoutParams(dp(120), dp(68)))
+        else row.addView(still, LinearLayout.LayoutParams(dp(168), dp(95)))
+        val copy = column().apply { setPadding(dp(if (DeviceLayout.phone) 10 else 14), dp(2), 0, 0) }
         copy.addView(text(listOf(number, detail).filter(String::isNotBlank).joinToString("  ·  "), 11, muted, true))
         copy.addView(text(episode.title, 15, ink, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, margin(-1, -2, top = 4))
         // Every episode's synopsis is visible in the list, as in a TV guide.
@@ -1973,6 +2089,7 @@ class MainActivity : Activity() {
             still.foreground = if (focused) FocusRingDrawable(Color.WHITE, dp(4).toFloat(), true, dp(1).toFloat()) else null
         }
         row.setOnClickListener { if (future) toast("This episode has not been released yet") else navigate { showSources(identity) } }
+        row.pressable(6)
         if (tracker.connected() && !future) row.setOnLongClickListener {
             confirm("Mark S${identity.season} E${identity.episode} as watched?") { load(generation, { tracker.markWatched(identity) }) { toast("Episode marked watched") } }; true
         }
@@ -2305,8 +2422,11 @@ class MainActivity : Activity() {
         destination = "library"; refreshNavigation()
         val id = page("My TorBox", "Your library, ready for the big screen.")
         if (!store.has("torbox.token")) { body.addView(button("Connect TorBox") { startTorBox() }, margin(190, 44)); return }
-        val tabs = horizontalRow()
-        listOf("torrents" to "Torrents", "usenet" to "Usenet", "webdl" to "Web downloads").forEach { (key, title) -> tabs.addView(button(title) { cloud(key) }, margin(150, 39, right = 8)) }
+        if (DeviceLayout.phone) phoneTabs(listOf("torrents" to "Torrents", "usenet" to "Usenet", "webdl" to "Web").map { (key, title) -> title to { cloud(key) } })
+        else {
+            val tabs = horizontalRow()
+            listOf("torrents" to "Torrents", "usenet" to "Usenet", "webdl" to "Web downloads").forEach { (key, title) -> tabs.addView(button(title) { cloud(key) }, margin(150, 39, right = 8)) }
+        }
         read(id, { torbox.cloud(kind) }) { folders ->
             if (folders.isEmpty()) body.addView(text("Nothing here yet. Your TorBox downloads will appear in this library.", 15, muted))
             if (flix) libraryGrid(folders.map { folder ->
@@ -2353,8 +2473,8 @@ class MainActivity : Activity() {
 
     /** Flix library: downloads as landscape cards in the same four-column grid as "See all", with matched artwork. */
     private fun libraryGrid(entries: List<LibraryEntry>) {
-        val width = 960 - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
-        val count = 4
+        val width = DeviceLayout.canvasWidth - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
+        val count = if (DeviceLayout.phone) 2 else 4
         val cardWidth = (width - 6 - (count - 1) * theme.layout.cardGapDp) / count
         entries.chunked(count).forEach { chunk ->
             val row = LinearLayout(this).apply { tag = "media-grid-row"; clipChildren = false }
@@ -2662,7 +2782,7 @@ class MainActivity : Activity() {
         page("Settings", "Make POV yours.")
 
         val home = settingsGroup("Home & appearance", "home")
-        settingsRow(home, "Theme", theme.displayName, "Layout, colours and artwork style.") { navigate { appearance() } }
+        if (DeviceLayout.tv) settingsRow(home, "Theme", theme.displayName, "Layout, colours and artwork style.") { navigate { appearance() } }
         val tmdbKey = store.get(TMDB_KEY)
         settingsRow(home, "TMDB", if (tmdbKey.isBlank()) "Not set" else "Connected",
             "Your own free TMDB key adds TMDB catalogs, and makes artwork load faster: TMDB backdrops are a fraction of the size.",
@@ -2802,7 +2922,7 @@ class MainActivity : Activity() {
         val updates = settingsGroup("Updates", "settings")
         settingsRow(updates, "Check for updates", "POV Rajput ${packageManager.getPackageInfo(packageName, 0).versionName.orEmpty().removeSuffix("-rajput")}") { startActivity(Intent(this, UpdateActivity::class.java)) }
         settingsToggle(updates, "Check on startup", "Looks for a newer signed release each time the app opens.",
-            store.get("updates.startup") == "true", contentLabel = "Check for updates on startup") { on -> store.put("updates.startup", on.toString()) }
+            store.get("updates.startup") != "false", contentLabel = "Check for updates on startup") { on -> store.put("updates.startup", on.toString()) }
 
         val about = settingsGroup("About", null)
         about.addView(text("POV Rajput fork by Rajput · Android TV port by Mark Mateo · based on the POV Kodi add-on by kodifitzwell (github.com/kodifitzwell/repo). Licensed under GNU GPL v3. WeTrakr tracking and API by alberdev (wetrakr.com). Catalogs: TMDB, Cinemeta and Kitsu. This product uses the TMDB API but is not endorsed or certified by TMDB. Playback: AndroidX Media3.", 12, muted).apply {
@@ -2836,16 +2956,17 @@ class MainActivity : Activity() {
         settingsDivider(card)
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(11), dp(12), dp(11))
-            isFocusable = true; isFocusableInTouchMode = true; isClickable = true; tag = "setting:$label"
+            isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; tag = "setting:$label"
             contentDescription = if (value.isBlank()) label else "$label · $value"
         }
         val copy = column()
         copy.addView(text(label, 14, if (danger) 0xFFFF6B6B.toInt() else ink, true))
         if (description.isNotBlank()) copy.addView(text(description, 11, muted).apply { setLineSpacing(dp(1).toFloat(), 1f) }, margin(-1, -2, top = 4))
         row.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
-        if (value.isNotBlank()) {
-            // A connection value is tinted: green when connected, muted otherwise.
-            val tint = when (status) { true -> 0xFF46D369.toInt(); else -> muted }
+        // A connection value is tinted: green when connected, muted otherwise.
+        val tint = when (status) { true -> 0xFF46D369.toInt(); else -> muted }
+        if (DeviceLayout.phone && value.length > PHONE_INLINE_VALUE) copy.addView(text(value, 12, tint, true), margin(-1, -2, top = 6))
+        else if (value.isNotBlank()) {
             row.addView(text(value, 12, tint, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.END }, margin(-2, -2).apply { leftMargin = dp(16) })
         }
         if (!danger) row.addView(text("›", 18, muted, true), margin(-2, -2).apply { leftMargin = dp(10) })
@@ -2854,7 +2975,7 @@ class MainActivity : Activity() {
             view.foreground = if (focused) FocusRingDrawable(if (flix) Color.WHITE else accent, dp(9).toFloat(), true, dp(1).toFloat()) else null
         }
         row.setOnClickListener { action() }
-        card.addView(row, margin(-1, -2))
+        card.addView(row.pressable(9), margin(-1, -2))
     }
 
     private fun settingsToggle(card: LinearLayout, label: String, description: String, initial: Boolean,
@@ -2875,7 +2996,7 @@ class MainActivity : Activity() {
         var on = initial
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(11), dp(12), dp(11))
-            isFocusable = true; isFocusableInTouchMode = true; isClickable = true; tag = "toggle:$label"
+            isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; tag = "toggle:$label"
         }
         val copy = column()
         val title = text(label, 14, ink, true)
@@ -3075,7 +3196,7 @@ class MainActivity : Activity() {
     private fun autoplayMaxGb() = if (store.get(AUTOPLAY_LIMIT_ON) == "true") autoplayLimitGb() else 0
 
     private fun resumeCards() = flix && store.get(RESUME_CARDS) != "false"  // on unless the viewer turns it off
-    private fun continueSlot() = margin(if (resumeCards()) RESUME_CARD_WIDTH else cardWidth(), theme.layout.cardHeightDp, right = theme.layout.cardGapDp)
+    private fun continueSlot() = margin(if (resumeCards()) (if (DeviceLayout.phone) 260 else RESUME_CARD_WIDTH) else cardWidth(), theme.layout.cardHeightDp, right = theme.layout.cardGapDp)
     private fun episodeLine(identity: PlaybackIdentity) = if (identity.type == "series") "S${identity.season} E${identity.episode}" else "Movie"
 
     /** Same height as every shelf, wider: artwork on the left, then title, episode, time left with a play mark, and progress. */
@@ -3083,11 +3204,11 @@ class MainActivity : Activity() {
         val radius = dp(6).toFloat()
         val idle = rounded(panel, 6); val lifted = rounded(0xFF3A3A40.toInt(), 6)
         val frame = FrameLayout(this).apply {
-            background = idle; clipToOutline = true; isFocusable = true; isFocusableInTouchMode = true; isClickable = true
+            background = idle; clipToOutline = true; isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true
             tag = "media:${item.type}:${item.imdbId.ifBlank { item.title }}"
             contentDescription = listOf(item.title, detail, timeLeft).filter(String::isNotBlank).joinToString(", ")
         }
-        val artWidth = dp(170)
+        val artWidth = dp(if (DeviceLayout.phone) 120 else 170)
         val art = FixedSizeImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         frame.addView(art, FrameLayout.LayoutParams(artWidth, -1))
         image(art, thumbnail(backdropFor(item)))
@@ -3121,13 +3242,13 @@ class MainActivity : Activity() {
             if (focused) scheduleFeature(item)
         }
         frame.setOnClickListener { action() }
-        return frame
+        return frame.pressable(6)
     }
 
     private fun cardWidth(): Int {
         if (flix) return theme.layout.cardWidthDp
         val visible = 5
-        val available = 960 - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2 - 13
+        val available = DeviceLayout.canvasWidth - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2 - 13
         return minOf(theme.layout.cardWidthDp, (available - (visible - 1) * theme.layout.cardGapDp) / visible)
     }
 
@@ -3144,7 +3265,7 @@ class MainActivity : Activity() {
             items.take(20).forEach { row.addView(card(it).apply { tag = "row:$title:${it.type}:${it.imdbId}" }, margin(cardWidth(), theme.layout.cardHeightDp, right = theme.layout.cardGapDp)) }
             row.addView(text("See all  ›", 13, ink, true).apply {
                 gravity = Gravity.CENTER; tag = "shelf:$title"; contentDescription = "See all $title"
-                isFocusable = true; isFocusableInTouchMode = true; isClickable = true; background = rounded(withAlpha(Color.WHITE, 22), theme.layout.cornerRadiusDp)
+                isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; background = rounded(withAlpha(Color.WHITE, 22), theme.layout.cornerRadiusDp)
                 setOnFocusChangeListener { view, focused ->
                     view.background = rounded(if (focused) Color.WHITE else withAlpha(Color.WHITE, 22), theme.layout.cornerRadiusDp)
                     setTextColor(if (focused) Color.BLACK else ink)
@@ -3181,8 +3302,8 @@ class MainActivity : Activity() {
     }
     private fun mediaGrid(items: List<MediaItemData>, showType: Boolean = false, host: LinearLayout = body) {
         if (items.isEmpty()) { host.addView(text("No titles found. Try a different search.", 14, muted)); return }
-        val width = 960 - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
-        val count = if (flix) 4 else (width / (cardWidth() + theme.layout.cardGapDp)).coerceAtLeast(1)
+        val width = DeviceLayout.canvasWidth - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
+        val count = if (flix) (if (DeviceLayout.phone) 2 else 4) else (width / (cardWidth() + theme.layout.cardGapDp)).coerceAtLeast(1)
         // Streaming grids stretch their columns to the full content width.
         val gridWidth = if (flix) (width - 6 - (count - 1) * theme.layout.cardGapDp) / count else cardWidth()
         val gridHeight = if (flix) gridWidth * 9 / 16 else theme.layout.cardHeightDp
@@ -3196,10 +3317,16 @@ class MainActivity : Activity() {
     }
     private fun card(item: MediaItemData): View = tile(item) { navigate { details(item) } }
 
+    /** Phones have no focus highlight, so tappable surfaces show a ripple instead. */
+    private fun <T : View> T.pressable(radius: Int): T = apply {
+        if (DeviceLayout.phone) foreground = android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x40FFFFFF), null, rounded(Color.WHITE, radius))
+    }
+
     private fun tile(item: MediaItemData, progress: Double? = null, caption: String = "", action: () -> Unit): View {
         val shape = theme.layout.cards
         val frame = FrameLayout(this).apply {
-            background = rounded(panel, theme.layout.cornerRadiusDp); isFocusable = true; isFocusableInTouchMode = true; isClickable = true
+            background = rounded(panel, theme.layout.cornerRadiusDp); isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true
             contentDescription = listOf(item.title, item.year, caption).filter(String::isNotBlank).joinToString(", ")
             tag = "media:${item.type}:${item.imdbId.ifBlank { item.title }}"
         }
@@ -3244,7 +3371,7 @@ class MainActivity : Activity() {
             if (focused) scheduleFeature(item)
         }
         frame.setOnClickListener { action() }
-        return frame
+        return frame.pressable(theme.layout.cornerRadiusDp)
     }
 
     private fun image(view: ImageView, address: String, keep: Boolean = false, feature: Boolean = false, loaded: ((Boolean) -> Unit)? = null) {
@@ -3311,12 +3438,14 @@ class MainActivity : Activity() {
         canvas.drawBitmap(source, null, android.graphics.RectF((width - drawnWidth) / 2, (height - drawnHeight) / 2,
             (width + drawnWidth) / 2, (height + drawnHeight) / 2), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
         val shade = android.graphics.Paint()
-        shade.shader = android.graphics.LinearGradient(0f, 0f, width.toFloat(), 0f,
+        // The phone banner has its copy below it, so only its foot fades into the page.
+        if (DeviceLayout.tv) shade.shader = android.graphics.LinearGradient(0f, 0f, width.toFloat(), 0f,
             if (corner) intArrayOf(bg, withAlpha(bg, 120), withAlpha(bg, 0), withAlpha(bg, 0), withAlpha(bg, 0))
             else intArrayOf(withAlpha(bg, 250), withAlpha(bg, 170), withAlpha(bg, 0), withAlpha(bg, 0)), null, android.graphics.Shader.TileMode.CLAMP)
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), shade)
+        if (DeviceLayout.tv) canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), shade)
         shade.shader = android.graphics.LinearGradient(0f, height.toFloat(), 0f, 0f,
             if (corner) intArrayOf(bg, withAlpha(bg, 70), withAlpha(bg, 0), withAlpha(bg, 0))
+            else if (DeviceLayout.phone) intArrayOf(bg, withAlpha(bg, 150), withAlpha(bg, 0), withAlpha(bg, 0))
             else intArrayOf(bg, withAlpha(bg, 215), withAlpha(bg, 0)), null, android.graphics.Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), shade)
         source.recycle()
@@ -3354,13 +3483,22 @@ class MainActivity : Activity() {
         scroller.addView(row); host.addView(scroller, margin(-1, -2).apply { if (flix) leftMargin = -dp(9) }); return row
     }
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    /** Phone tab strip: equal-width buttons across the full width. */
+    private fun phoneTabs(tabs: List<Pair<String, () -> Unit>>) {
+        val row = LinearLayout(this)
+        tabs.forEachIndexed { index, (label, action) ->
+            row.addView(button(label) { action() }.apply { gravity = Gravity.CENTER; maxLines = 1 },
+                LinearLayout.LayoutParams(0, dp(40), 1f).apply { if (index < tabs.lastIndex) rightMargin = dp(8) })
+        }
+        body.addView(row, margin(-1, -2, bottom = 4))
+    }
     private fun text(value: String, size: Int, color: Int, bold: Boolean = false) = TextView(this).apply {
         text = value; setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(size).toFloat()); setTextColor(color)
         typeface = Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL); includeFontPadding = false
     }
     private fun button(label: String, action: () -> Unit): TextView = text(label, 13, ink, true).apply {
         gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(5), dp(12), dp(5)); background = rounded(panel, 7)
-        isFocusable = true; isFocusableInTouchMode = true; isClickable = true; contentDescription = label; tag = "action:$label"
+        isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; contentDescription = label; tag = "action:$label"
         if (flix) {
             // Translucent until focused, then solid white with dark text.
             background = rounded(withAlpha(0xFF6D6D6E.toInt(), 150), 4)
@@ -3370,6 +3508,7 @@ class MainActivity : Activity() {
                 view.animate().scaleX(if (focus) 1.05f else 1f).scaleY(if (focus) 1.05f else 1f).setDuration(120).start()
             }
             setOnClickListener { action() }
+            pressable(4)
             return@apply
         }
         setOnFocusChangeListener { view, focus ->
@@ -3381,7 +3520,7 @@ class MainActivity : Activity() {
     }
     private fun primaryButton(label: String, action: () -> Unit): TextView = text(label, 15, theme.palette.buttonText, true).apply {
         tag = "primary:$label"
-        gravity = Gravity.CENTER; isFocusable = true; isFocusableInTouchMode = true; isClickable = true
+        gravity = Gravity.CENTER; isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true
         if (flix) {
             background = rounded(withAlpha(Color.WHITE, 225), 4)
             setOnFocusChangeListener { view, focused ->
@@ -3390,6 +3529,7 @@ class MainActivity : Activity() {
                 view.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f).setDuration(120).start()
             }
             setOnClickListener { action() }
+            pressable(4)
             return@apply
         }
         background = rounded(theme.palette.primaryButton, if (theme == ThemeSpec.EDITORIAL) 23 else 6)
@@ -3404,7 +3544,7 @@ class MainActivity : Activity() {
     private fun rounded(color: Int, radius: Int, stroke: Int = Color.TRANSPARENT) = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; setColor(color); cornerRadius = dp(radius).toFloat(); if (stroke != Color.TRANSPARENT) setStroke(dp(2), stroke) }
     private fun withAlpha(color: Int, alpha: Int) = Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
     private fun margin(width: Int, height: Int, top: Int = 0, bottom: Int = 0, right: Int = 0) = LinearLayout.LayoutParams(if (width < 0) width else dp(width), if (height < 0) height else dp(height)).apply { setMargins(0, dp(top), dp(right), dp(bottom)) }
-    private fun dp(value: Int) = (value * resources.displayMetrics.widthPixels / 960f).roundToInt()
+    private fun dp(value: Int) = (value * resources.displayMetrics.widthPixels / DeviceLayout.canvasWidth.toFloat()).roundToInt()
     private var notice: TextView? = null
     private val hideNotice = Runnable { notice?.animate()?.alpha(0f)?.translationY(dp(12).toFloat())?.setDuration(220)?.withEndAction { notice?.visibility = View.GONE }?.start() }
     /** A short in-app notice styled like the app's dialogs, instead of the system toast. */
@@ -3415,7 +3555,7 @@ class MainActivity : Activity() {
             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xF22A2A30.toInt(), 0xF217171A.toInt())).apply {
                 cornerRadius = dp(12).toFloat(); setStroke(dp(1), 0x2EFFFFFF)
             }
-            shellRoot.addView(this, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(28) })
+            shellRoot.addView(this, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(if (DeviceLayout.phone) BOTTOM_BAR_HEIGHT + 16 else 28) })
             notice = this
         }
         view.text = message; view.bringToFront(); view.visibility = View.VISIBLE
@@ -3423,6 +3563,25 @@ class MainActivity : Activity() {
         view.animate().alpha(1f).translationY(0f).setDuration(200).start()
         view.removeCallbacks(hideNotice); view.postDelayed(hideNotice, 3_500)
     }
+    /**
+     * A long synopsis in its own capped, scrollable area: a plain dialog message would grow past the screen
+     * and squeeze the Close button into a second scrolling strip.
+     */
+    private fun synopsisDialog(title: String, synopsis: String) {
+        val density = resources.displayMetrics.density
+        val body = TextView(this).apply {
+            text = synopsis; textSize = 16f; setTextColor(0xFFE6E6E6.toInt()); setLineSpacing(0f, 1.15f)
+            setPadding((24 * density).toInt(), (4 * density).toInt(), (24 * density).toInt(), (8 * density).toInt())
+        }
+        val cap = (resources.displayMetrics.heightPixels * 0.6f).roundToInt()
+        // Never taller than 60% of the screen. Focusable so the remote's Up/Down scrolls the text.
+        val scroll = object : ScrollView(this) {
+            override fun onMeasure(widthSpec: Int, heightSpec: Int) =
+                super.onMeasure(widthSpec, View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.AT_MOST))
+        }.apply { isFocusable = true; addView(body) }
+        AlertDialog.Builder(this).setTitle(title).setView(scroll).setPositiveButton("Close", null).show()
+    }
+
     private fun confirm(message: String, action: () -> Unit)
  { AlertDialog.Builder(this).setMessage(message).setPositiveButton("Continue") { _, _ -> action() }.setNegativeButton("Cancel", null).show() }
 }

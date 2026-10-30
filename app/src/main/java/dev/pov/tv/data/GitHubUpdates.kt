@@ -81,6 +81,9 @@ class GitHubUpdates(private val context: Context) {
     companion object {
         const val REPOSITORY = "husnainahmedrana/pov-rajput-android-tv"
         private const val MAX_APK = 200L * 1024 * 1024
+        internal const val APK_ASSET = dev.pov.tv.BuildConfig.UPDATE_APK
+        internal const val MANIFEST_ASSET = dev.pov.tv.BuildConfig.UPDATE_MANIFEST
+        internal const val UPDATE_PACKAGE = dev.pov.tv.BuildConfig.UPDATE_PACKAGE
         @Suppress("DEPRECATION")
         private fun code(info: PackageInfo) = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
         private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
@@ -92,8 +95,9 @@ class GitHubUpdates(private val context: Context) {
             val assets = json.optJSONArray("assets") ?: return null
             fun asset(name: String): JSONObject? = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }
                 .singleOrNull { it.optString("name") == name && it.optString("state") == "uploaded" }
-            val apk = asset("POV-Rajput-release.apk") ?: return null
-            val manifest = asset("update.json") ?: return null
+            // The TV and phone apps each read their own APK and manifest from the same release.
+            val apk = asset(APK_ASSET) ?: return null
+            val manifest = asset(MANIFEST_ASSET) ?: return null
             fun url(asset: JSONObject, name: String): String {
                 val expected = "https://github.com/$REPOSITORY/releases/download/$tag/$name"
                 check(asset.optString("browser_download_url") == expected) { "Unexpected release asset address." }
@@ -101,10 +105,10 @@ class GitHubUpdates(private val context: Context) {
             }
             val size = apk.optLong("size")
             check(size in 1..MAX_APK) { "Release APK size is invalid." }
-            return Candidate(tag, json.optString("body").take(12_000), url(apk, "POV-Rajput-release.apk"), url(manifest, "update.json"), size)
+            return Candidate(tag, json.optString("body").take(12_000), url(apk, APK_ASSET), url(manifest, MANIFEST_ASSET), size)
         }
         internal fun manifest(json: JSONObject, candidate: Candidate, installed: Long): Release? {
-            check(json.optInt("schema") == 1 && json.optString("packageName") == "dev.pov.tv.rajput") { "Incompatible update information." }
+            check(json.optInt("schema") == 1 && json.optString("packageName") == UPDATE_PACKAGE) { "Incompatible update information." }
             val code = json.getLong("versionCode")
             val version = json.getString("versionName")
             val checksum = json.getString("sha256").lowercase(java.util.Locale.ROOT)

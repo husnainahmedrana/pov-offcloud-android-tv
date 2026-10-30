@@ -12,7 +12,7 @@ enum class ThemeSpec(
     val displayName: String,
     val description: String,
     val palette: ThemePalette,
-    val layout: ThemeLayout,
+    private val tvLayout: ThemeLayout,
 ) {
     FLIX(
         id = "flix",
@@ -26,7 +26,7 @@ enum class ThemeSpec(
             navSelected = 0x33FFFFFF, progress = 0xFFE50914.toInt(),
             primaryButton = 0xFFFFFFFF.toInt(),
         ),
-        layout = ThemeLayout(
+        tvLayout = ThemeLayout(
             navigation = NavigationPlacement.LEFT_RAIL, hero = HeroComposition.FULL_BLEED,
             cards = CardFormat.LANDSCAPE, contentInsetDp = 36, railWidthDp = 0,
             headerHeightDp = 0, heroHeightDp = 300, cardWidthDp = 190, cardHeightDp = 107,
@@ -47,7 +47,7 @@ enum class ThemeSpec(
             navSelected = 0xFFEEE8F8.toInt(), progress = 0xFF6AD7FF.toInt(),
             primaryButton = 0xFF16264B.toInt(),
         ),
-        layout = ThemeLayout(
+        tvLayout = ThemeLayout(
             navigation = NavigationPlacement.TOP_BAR, hero = HeroComposition.SPLIT,
             cards = CardFormat.POSTER, contentInsetDp = 34, railWidthDp = 0,
             headerHeightDp = 59, heroHeightDp = 225, cardWidthDp = 170, cardHeightDp = 197,
@@ -56,6 +56,13 @@ enum class ThemeSpec(
             sectionTitleSizeSp = 17, focusScale = 1.018f,
         ),
     );
+
+    /** The phone app draws Flix on a ~400-unit portrait canvas with a bottom navigation bar. */
+    val layout: ThemeLayout get() = if (DeviceLayout.phone) tvLayout.copy(
+        navigation = NavigationPlacement.BOTTOM_BAR, contentInsetDp = 14, headerHeightDp = 0,
+        heroHeightDp = 380, cardWidthDp = 150, cardHeightDp = 84, cardGapDp = 8,
+        titleSizeSp = 30, sectionTitleSizeSp = 15, focusScale = 1f,
+    ) else tvLayout
 
     companion object {
         /** Unknown, retired or older preferences (including "streaming") fall back to Flix. */
@@ -97,7 +104,7 @@ data class ThemeLayout(
     val focusScale: Float,
 )
 
-enum class NavigationPlacement { LEFT_RAIL, TOP_BAR }
+enum class NavigationPlacement { LEFT_RAIL, TOP_BAR, BOTTOM_BAR }
 enum class HeroComposition { FULL_BLEED, SPLIT }
 enum class CardFormat { LANDSCAPE, POSTER }
 
@@ -106,7 +113,8 @@ class ThemePreferences(context: Context) {
     private val preferences = context.applicationContext
         .getSharedPreferences("pov_appearance", Context.MODE_PRIVATE)
 
-    fun selected(): ThemeSpec = ThemeSpec.fromId(preferences.getString(KEY, null))
+    // The phone layouts are built for Flix only.
+    fun selected(): ThemeSpec = if (DeviceLayout.phone) ThemeSpec.FLIX else ThemeSpec.fromId(preferences.getString(KEY, null))
 
     fun select(theme: ThemeSpec) {
         preferences.edit().putString(KEY, theme.id).apply()

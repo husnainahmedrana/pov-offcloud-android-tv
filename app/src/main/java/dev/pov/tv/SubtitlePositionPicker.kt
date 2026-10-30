@@ -26,7 +26,7 @@ internal object SubtitlePositionPicker {
         })
         val slider = SeekBar(context).apply {
             max = 29; keyProgressIncrement = 1
-            isFocusableInTouchMode = true
+            isFocusableInTouchMode = DeviceLayout.tv
             progress = (if (original < 0) 8 else original) - 1
             contentDescription = "Subtitle distance from bottom"
         }

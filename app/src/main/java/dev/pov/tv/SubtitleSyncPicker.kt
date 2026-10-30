@@ -26,7 +26,7 @@ internal object SubtitleSyncPicker {
         val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         val value = TextView(context).apply {
             textSize = 26f; gravity = Gravity.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            isFocusable = true; isFocusableInTouchMode = true; background = chip(false); setTextColor(Color.WHITE)
+            isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; background = chip(false); setTextColor(Color.WHITE)
             setPadding(dp(18), dp(8), dp(18), dp(8))
             setOnFocusChangeListener { _, focused -> background = chip(focused); setTextColor(if (focused) Color.BLACK else Color.WHITE) }
         }

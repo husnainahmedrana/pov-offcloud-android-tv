@@ -51,13 +51,15 @@ Captured on a 55" TV in the app's public preview mode, which shows public catalo
 
 ## Getting started
 
-1. Download `POV-Rajput-release.apk` from [Releases](https://github.com/husnainahmedrana/pov-rajput-android-tv/releases/latest) and sideload it on Android TV 8.0 or later. The launcher name is **POV Rajput** (package `dev.pov.tv.rajput`).
+1. Download the APK for your device from [Releases](https://github.com/husnainahmedrana/pov-rajput-android-tv/releases/latest) and sideload it (Android 8.0 or later). The launcher name is **POV Rajput**.
+   - **Android TV / Google TV:** `POV-Rajput-TV.apk` (package `dev.pov.tv.rajput`). `POV-Rajput-release.apk` is the same file under its older name.
+   - **Phones:** `POV-Rajput-Mobile.apk` (package `dev.pov.rajput.mobile`), a separate app with a portrait layout, bottom navigation and a touch player.
 2. **Settings → Debrid Services**: connect **Offcloud**, **TorBox** (sign in with a code or paste an API key), **Real-Debrid**, **AllDebrid**, **Premiumize** or **Debrid-Link** with your own API keys. Real-Debrid, AllDebrid and Debrid-Link have no up-front cache check, so the app tries the first 7 links when you play and plays the first cached one.
-3. **Settings → Debrid Services → Source providers**: add your preferred HTTPS Stremio-compatible add-ons, each with a name you choose.
+3. **Settings → Debrid Services → Source providers**: add your preferred HTTPS Stremio-compatible add-ons, each with a name you choose. Without a debrid service, add-ons that return direct links still work.
 4. *Optional* — **Settings → Home & appearance → TMDB**: paste your free TMDB API key or read-access token from [themoviedb.org](https://www.themoviedb.org/settings/api), then pick a **Cinema country**.
 5. *Optional* — **Settings → WeTrakr**: enter your own registered Client ID and approve the activation code at **https://wetrakr.com/activate**.
 
-No API key, token, Client ID or account is included in the app. Every value you enter stays encrypted on your TV.
+No API key, token, Client ID or account is included in the app. Every value you enter stays encrypted on your device.
 
 ## Using the app
 
