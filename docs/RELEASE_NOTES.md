@@ -1,23 +1,16 @@
-# POV Rajput 0.3.3
+# POV Rajput 0.3.4
 
-## Simkl support
+## Faster startup
 
-- **Choose WeTrakr or Simkl** in **Settings → Tracking → Service**. The menu, Home's Continue Watching, Up Next and watchlists follow your choice, and each service keeps its own sign-in.
-- **Sign in with a code or QR**, no setup: POV Rajput has its own registered Simkl app built in. Scanning the QR code is enough, since it already includes the code.
-- Simkl gets scrobbling (progress while you watch; finishing 90% or more marks it watched), watchlist add/remove, mark watched and offline progress replay.
-- Simkl has no API for personal or liked lists yet, so those stay WeTrakr-only. Removing a title from your Simkl watchlist only works for titles you haven't watched, because Simkl's removal would also erase watch history.
+- **The app opens about three times faster** (around 3 seconds instead of 10 on a TV with a long Continue Watching list). Saved settings are now decrypted once instead of on every read.
+- Continue Watching shows your 30 most recently paused titles, newest first.
 
-## Watched indicators
+## Continue Watching stays up to date
 
-- **A ✓ badge on everything you've watched**: movie and show cards, Top 10 posters and each watched episode in the episode list. It works with WeTrakr and Simkl.
-- Marking something watched shows its badge at once, and a finished video gets its badge a few seconds after you close the player.
-- Your watched history is saved on the device, so badges appear instantly; the app only downloads it again when WeTrakr or Simkl reports a change.
+- **Closing the player refreshes Continue Watching**, so the row shows where you stopped. It updates in place without moving your selection.
+- Removing a title from Continue Watching moves the selection to the newer title on its left.
 
-## Fixes
+## Bitrate
 
-- **Signing in on the phone** (WeTrakr or Simkl) now works when you approve the code in the phone's own browser: the app keeps checking while you're away and checks again the moment you come back.
-- Switching between WeTrakr and Simkl in Settings no longer jumps back to the top of the page.
-
-## Flix only
-
-- The Editorial theme has been retired; everyone now uses the Flix look. The Theme setting is gone, and Editorial users open in Flix automatically.
+- **Each link shows its estimated bitrate** (for example ≈18 Mbps) beside its size, worked out from the file size and the title's runtime.
+- **Auto-play limit by bitrate.** Settings → Playback → Auto-play limit now has a **Highest bitrate** (25 Mbps by default) for movies and episodes alike, with separate **Movie** (20 GB) and **Episode** (5 GB) size fallbacks for when the runtime isn't known.

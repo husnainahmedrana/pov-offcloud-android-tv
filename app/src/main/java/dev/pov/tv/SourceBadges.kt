@@ -21,7 +21,8 @@ internal data class SourceBadge(val label: String, val tone: SourceBadgeTone = S
 
 /** Release-name tags are provider claims, not a probe of the selected video's capabilities. */
 internal object SourceBadges {
-    fun from(source: SourceItem, languages: SourceLanguageOrder? = null): List<SourceBadge> = buildList {
+    /** [runtimeMinutes] (the title's runtime, when known) adds the estimated bitrate beside the size. */
+    fun from(source: SourceItem, languages: SourceLanguageOrder? = null, runtimeMinutes: Int? = null): List<SourceBadge> = buildList {
         add(SourceBadge(SourceMetadata.qualityLabel(source.qualityHeight), when (source.qualityHeight) {
             2160, 4320 -> SourceBadgeTone.UHD
             1080 -> SourceBadgeTone.FULL_HD
@@ -29,6 +30,7 @@ internal object SourceBadges {
             else -> SourceBadgeTone.OTHER
         }, quality = true))
         add(SourceBadge(SourceMetadata.sizeLabel(source.sizeBytes)))
+        AutoplayLimit.mbps(source.sizeBytes, runtimeMinutes)?.let { add(SourceBadge("≈${Math.round(it)} Mbps")) }
         val metadata = "${source.title} ${source.detail}".take(4000)
         fun has(pattern: String) = Regex("(?i)(?<![a-z0-9])(?:$pattern)(?![a-z0-9])").containsMatchIn(metadata)
         fun tag(label: String) { add(SourceBadge(label)) }

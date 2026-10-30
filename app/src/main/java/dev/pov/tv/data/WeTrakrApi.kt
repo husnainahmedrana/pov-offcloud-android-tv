@@ -250,13 +250,14 @@ class WeTrakrApi internal constructor(
         try {
             return listOf("movies", "episodes").map { kind -> pool.submit(java.util.concurrent.Callable {
                 pages("/sync/tracking/playing/$kind?extended=show_level_1").mapNotNull { item ->
-                    val progress = item.optJSONObject("playback")?.optDouble("progress_percent", Double.NaN) ?: return@mapNotNull null
+                    val playback = item.optJSONObject("playback") ?: return@mapNotNull null
+                    val progress = playback.optDouble("progress_percent", Double.NaN)
                     if (!progress.isFinite() || progress <= 0 || progress >= 95) return@mapNotNull null
-                    identity(item)?.let { it to progress }
+                    identity(item)?.let { Triple(it, progress, playback.optString("tracked_at")) }
                 }
             }) }.flatMap { task ->
                 try { task.get() } catch (error: java.util.concurrent.ExecutionException) { throw (error.cause as? Exception ?: error) }
-            }
+            }.sortedByDescending { it.third }.map { (identity, progress, _) -> identity to progress }  // Most recently paused first.
         } finally { pool.shutdownNow() }
     }
     override fun nextEpisodes(): List<PlaybackIdentity> = pages("/sync/tracking/watching/shows?extended=episode_level_1").mapNotNull { show ->
@@ -279,6 +280,8 @@ class WeTrakrApi internal constructor(
         fun image(key: String) = item.optString(key).takeIf { it.startsWith('/') }?.let { "https://image.tmdb.org/t/p/w500$it" }.orEmpty()
         return MediaItemData(id, type, title, item.optString(if (type == "movie") "release_date" else "first_air_date").take(4), image("poster_path"), image("backdrop_path"))
     }
+    override fun refreshCaches() = cache.clear()
+
     override fun watchedStamp(): String {
         val activity = parseObject(request("/sync/last_activities"))
         return listOf("movies", "shows", "episodes").joinToString("|") { section ->

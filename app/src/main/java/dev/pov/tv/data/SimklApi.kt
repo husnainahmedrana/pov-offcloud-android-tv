@@ -98,11 +98,13 @@ class SimklApi internal constructor(
         return progressForAccount(identity, percent, "pause", revision, expectedScrobbleRevision)
     }
 
-    override fun continueWatching(): List<Pair<PlaybackIdentity, Double>> = array(get("/sync/playback")).mapNotNull { item ->
-        val progress = item.optDouble("progress", Double.NaN)
-        if (!progress.isFinite() || progress <= 0 || progress >= 95) return@mapNotNull null
-        playbackIdentity(item)?.let { it to progress }
-    }
+    /** Most recently paused first. */
+    override fun continueWatching(): List<Pair<PlaybackIdentity, Double>> = array(get("/sync/playback"))
+        .sortedByDescending { it.optString("paused_at") }.mapNotNull { item ->
+            val progress = item.optDouble("progress", Double.NaN)
+            if (!progress.isFinite() || progress <= 0 || progress >= 95) return@mapNotNull null
+            playbackIdentity(item)?.let { it to progress }
+        }
 
     override fun removeContinueWatching(identity: PlaybackIdentity, revision: String) {
         if (revision.isBlank() || accountRevision() != revision || !connected()) ended()
@@ -156,6 +158,8 @@ class SimklApi internal constructor(
     }
 
     override fun markWatched(identity: PlaybackIdentity) { validate(identity); history(identity, watchedAt = null); cache.clear() }
+
+    override fun refreshCaches() = cache.clear()
 
     override fun watchedStamp(): String {
         val activity = parseObject(request("GET", "/sync/activities"))

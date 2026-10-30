@@ -47,6 +47,10 @@ class MainActivity : Activity() {
     private var watched = WatchedState.EMPTY
     private val watchedCache by lazy { WatchedCache(java.io.File(filesDir, "watched.json")) }
     @Volatile private var watchedLoading = false
+    /** Re-reads the Continue Watching row on Home in place; set while that row exists. */
+    private var refreshContinue: (() -> Unit)? = null
+    /** The player was opened from here, so returning to this screen refreshes Continue Watching. */
+    private var playerShown = false
     private var watchedCheckedAt = 0L
     private lateinit var resolver: SourceResolver
     private val catalog = CatalogApi()
@@ -175,6 +179,7 @@ class MainActivity : Activity() {
         super.onResume(); resumed = true; launchingPlayer = false
         // Back from approving a sign-in code in the browser: check for it straight away.
         authorization?.takeIf { it.isShowing }?.pollNow()
+        if (playerShown) { playerShown = false; scheduleContinueRefresh() }
         if (!publicPreview && ::store.isInitialized && android.os.SystemClock.elapsedRealtime() - watchedCheckedAt > 60_000) refreshWatched()
         if (::shellRoot.isInitialized) updateMiniPlayer()
         if (BackHoldGesture.settingsRequested && ::shellRoot.isInitialized) { BackHoldGesture.settingsRequested = false; openSettingsAnywhere() }
@@ -730,8 +735,9 @@ class MainActivity : Activity() {
             row.removeAllViews(); host.findViewWithTag<View>("wetrakr-empty")?.let(host::removeView)
             // WeTrakr is authoritative here, including progress made on other devices.
             if (progress.isEmpty()) host.addView(text("Nothing in progress on ${wetrakr.name}.", 13, muted).apply { tag = "wetrakr-empty" })
-            progress.forEach { (identity, percent) ->
-                remoteProgress[identityKey(identity)] = percent
+            progress.forEach { (identity, percent) -> remoteProgress[identityKey(identity)] = percent }
+            // A tracker can hold hundreds of paused titles; Home shows the most recent ones.
+            progress.take(CONTINUE_LIMIT).forEach { (identity, percent) ->
                 val caption = listOf(if (identity.type == "series") "S${identity.season} E${identity.episode}" else "", "${percent.toInt()}%").filter { it.isNotBlank() }.joinToString(" · ")
                 val item = MediaItemData(identity.imdbId, identity.type, identity.title)
                 val open: () -> Unit = { continuePlayback(identity) }
@@ -741,6 +747,18 @@ class MainActivity : Activity() {
         }
         // The last list is kept encrypted with the account revision, so the row shows instantly on launch.
         val revision = wetrakr.accountRevision()
+        refreshContinue = {
+            val tracker = wetrakr
+            worker.execute {
+                val fresh = try { tracker.refreshCaches(); tracker.continueWatching() } catch (_: Exception) { null }
+                runOnUiThread {
+                    if (fresh == null || isDestroyed || tracker.accountRevision() != revision || !row.isAttachedToWindow) return@runOnUiThread
+                    store.put(CONTINUE_CACHE, org.json.JSONObject().put("revision", revision).put("items", org.json.JSONArray(fresh.map { (identity, percent) ->
+                        org.json.JSONObject().put("id", identity.toJson()).put("percent", percent) })).toString())
+                    if (!row.hasFocus()) fill(fresh)
+                }
+            }
+        }
         val cached = cachedContinueWatching()
         cached?.let(::fill)
         read(id, { wetrakr.continueWatching() }) { progress ->
@@ -1304,8 +1322,9 @@ class MainActivity : Activity() {
         val parent = view.parent as? ViewGroup
         val index = parent?.indexOfChild(view) ?: 0
         hideContinue(view.getTag(R.id.pov_continue_identity).toString())
-        parent?.let { group -> (index until group.childCount).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable }?.requestFocus()
-            ?: (index - 1 downTo 0).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable }?.requestFocus() }
+        // Rows run newest first: focus moves to the newer card on the left, or the next one when this was first.
+        parent?.let { group -> (index - 1 downTo 0).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable }?.requestFocus()
+            ?: (index until group.childCount).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable }?.requestFocus() }
         if (!focusController.hasVisibleLeafFocus()) focusController.first()
     }
     private fun continueOptions(view: View, key: String, identity: PlaybackIdentity?, title: String) {
@@ -1351,6 +1370,11 @@ class MainActivity : Activity() {
     private fun resumeRow(recent: List<PlaybackStore.Recent>) {
         section("Continue Watching")
         val row = horizontalRow()
+        refreshContinue = { if (row.isAttachedToWindow && !row.hasFocus()) { row.removeAllViews(); fillResumeRow(row, history.continueWatching()) } }
+        fillResumeRow(row, recent)
+    }
+
+    private fun fillResumeRow(row: LinearLayout, recent: List<PlaybackStore.Recent>) {
         recent.take(12).forEach { saved ->
             val identity = saved.identity
             val item = MediaItemData(identity?.imdbId.orEmpty(), identity?.type ?: "movie", saved.title,
@@ -1383,14 +1407,14 @@ class MainActivity : Activity() {
 
     private fun returnToVideo() {
         if (!InAppPlaybackSession.hasActive()) return
-        PlayerActivity.openCurrent(this)
+        if (PlayerActivity.openCurrent(this)) playerShown = true
     }
 
     private fun playbackOptions() {
         if (!InAppPlaybackSession.hasActive() || currentPlaybackOptionsDialog?.isShowing == true) return
         val dialog = AlertDialog.Builder(this).setTitle("Now playing · ${InAppPlaybackSession.title}")
             .setItems(arrayOf("Return to video", "Stop playback")) { _, choice ->
-                if (choice == 0) returnToVideo() else InAppPlaybackSession.stop()
+                if (choice == 0) returnToVideo() else { InAppPlaybackSession.stop(); scheduleContinueRefresh() }
             }.setNegativeButton("Keep browsing", null).create()
         dialog.setOnShowListener { dialog.window?.decorView?.tag = "pov_mini_playback_options" }
         currentPlaybackOptionsDialog = dialog
@@ -1844,7 +1868,7 @@ class MainActivity : Activity() {
             }
         }
     }
-    private companion object { const val VOICE_REQUEST = 701; const val PLAYBACK_REQUEST = 702; const val MIC_REQUEST = 703; const val FLIX_ROW_LINE = 236; const val FEATURE_INTERVAL_MS = 5_000L; const val AUTOPLAY_FIRST = "sources.autoplay_first"; const val AUTOPLAY_MAX_GB = "sources.autoplay_max_gb"; const val AUTOPLAY_LIMIT_ON = "sources.autoplay_limit_on"; const val BACKDROP_WIDTH = 1280; const val CONTINUE_CACHE = "wetrakr.continue_cache"
+    private companion object { const val VOICE_REQUEST = 701; const val PLAYBACK_REQUEST = 702; const val MIC_REQUEST = 703; const val FLIX_ROW_LINE = 236; const val FEATURE_INTERVAL_MS = 5_000L; const val AUTOPLAY_FIRST = "sources.autoplay_first"; const val AUTOPLAY_MAX_GB = "sources.autoplay_max_gb"; const val AUTOPLAY_MAX_GB_EPISODE = "sources.autoplay_max_gb_episode"; const val AUTOPLAY_MAX_MBPS = "sources.autoplay_max_mbps"; const val AUTOPLAY_LIMIT_ON = "sources.autoplay_limit_on"; const val BACKDROP_WIDTH = 1280; const val CONTINUE_CACHE = "wetrakr.continue_cache"
         const val TMDB_KEY = "tmdb.key"; const val TMDB_REGION = "tmdb.region"
         const val HOME_KEEP_MS = 15 * 60_000L
         const val HOME_BACKDROP_SCALE = 0.72f
@@ -1854,7 +1878,7 @@ class MainActivity : Activity() {
         /** Bump when the set of Home rows changes, so rows saved under the old set are not shown. */
         const val SHELF_SET_VERSION = "2"
         const val RESUME_CARD_WIDTH = 300; const val RESUME_CARDS = "home.resume_cards"
-        const val SYNOPSIS_MORE_CHARS = 220
+        const val SYNOPSIS_MORE_CHARS = 220; const val CONTINUE_LIMIT = 30
         const val PHONE_INLINE_VALUE = 18; const val BOTTOM_BAR_HEIGHT = 56; const val PHONE_BAR_COLOR = 0xFF0B0B0B.toInt()
         /** Where the phone's feature copy starts: over the foot of the 225-unit banner. */
         const val PHONE_COPY_TOP = 150 }
@@ -2122,7 +2146,11 @@ class MainActivity : Activity() {
         val order = connected.joinToString(" → ") { DebridServices.name(it) }
         // Without a debrid service, addons can still supply direct links; torrents are left out.
         val id = page(identity.title + suffix, if (connected.isEmpty()) "Direct links only. Torrent sources need a debrid service." else "Cached source priority: $order.")
-        read(id, { resolver.search(identity) }) { result ->
+        // The title's runtime (for each link's estimated bitrate) loads alongside the source search, which takes far
+        // longer, so it is ready when the list appears however the sources were opened.
+        val title = MediaItemData(identity.imdbId, identity.type, identity.title)
+        val details = if (cachedDetails(title) != null) null else metadataWorker.submit(java.util.concurrent.Callable { runCatching { fetchDetails(title) }.getOrNull() })
+        read(id, { resolver.search(identity).also { runCatching { details?.get(1_500, java.util.concurrent.TimeUnit.MILLISECONDS) } } }) { result ->
             sourceResults(identity, result.items, result.unavailableProviders, autoplay = store.get(AUTOPLAY_FIRST) == "true")
         }
     }
@@ -2153,6 +2181,8 @@ class MainActivity : Activity() {
             body.addView(button("Connect a debrid service in Settings") { navigate { settings() } }, margin(-1, 44, top = 8))
         }
         val choices = TvChoiceList(this); body.addView(choices, margin(-1, -2))
+        // The title's runtime (from details already loaded) turns each file size into an estimated bitrate.
+        val minutes = AutoplayLimit.runtimeMinutes(cachedDetails(MediaItemData(identity.imdbId, identity.type, identity.title))?.runtime)
         // Sources taller than this TV can decode (such as 8K on a 4K TV) go last and are never auto-played.
         val limit = DecoderLimits.maxHeight()
         fun tooTall(source: SourceItem) = (source.qualityHeight ?: 0) > limit
@@ -2169,7 +2199,7 @@ class MainActivity : Activity() {
             }
             val limitNote = if (tooTall(source)) " · ABOVE THIS TV'S ${DecoderLimits.label(limit)} LIMIT" else ""
             choices.addChoice(TvChoiceRow(this, TvChoiceKeys.source(source), source.title, source.detail,
-                "$status$limitNote · ${source.provider}", theme.palette, SourceBadges.from(source, languages)) {
+                "$status$limitNote · ${source.provider}", theme.palette, SourceBadges.from(source, languages, minutes)) {
                 if (!source.cached && source.directUrl.isEmpty()) {
                     if (checkOnPlay.isNotEmpty()) resolveFirstCached(ordered.dropWhile { it !== source }.filterNot(::tooTall), identity, source)
                     else offerTransfer(source, identity)
@@ -2181,8 +2211,10 @@ class MainActivity : Activity() {
         // Only a fresh search auto-plays; returning to this list leaves the choice to the viewer.
         if (autoplay) {
             // Auto-play skips links over the viewer's size limit; links of unknown size stay eligible.
-            val maxBytes = autoplayMaxGb() * 1_000_000_000L
-            fun tooBig(source: SourceItem) = maxBytes > 0 && (source.sizeBytes ?: 0) > maxBytes
+            // Over the bitrate cap when the runtime is known, else over this kind of title's size cap.
+            val limited = store.get(AUTOPLAY_LIMIT_ON) == "true"
+            val maxBytes = autoplayLimitGb(episode = identity.type == "series") * 1_000_000_000L
+            fun tooBig(source: SourceItem) = limited && AutoplayLimit.tooBig(source.sizeBytes, minutes, autoplayMaxMbps(), maxBytes)
             val first = ordered.firstOrNull { (it.cached || it.directUrl.isNotEmpty()) && !tooTall(it) && !tooBig(it) }
             if (first != null) { toast("Playing the top result · ${first.title.take(60)}"); resolve(first, identity) }
             else if (checkOnPlay.isNotEmpty()) resolveFirstCached(ordered.filterNot { tooTall(it) || tooBig(it) }, identity, null)
@@ -2615,7 +2647,7 @@ class MainActivity : Activity() {
                      headers: Map<String, String> = emptyMap()) {
         if (launchingPlayer) return
         if (Uri.parse(url).scheme !in setOf("https", "http")) { toast("This stream did not return a playable web link."); return }
-        launchingPlayer = true
+        launchingPlayer = true; playerShown = true
         val remotePercent = identity?.let { remoteProgress[identityKey(it)] } ?: 0.0
         val start = {
             val intent = Intent(this, PlayerActivity::class.java).putExtra("url", url).putExtra("title", title)
@@ -2814,13 +2846,24 @@ class MainActivity : Activity() {
         }
         settingsToggle(playback, "Auto-play first result", "Play starts the first cached or direct link in your sort order. The full list stays open behind it, so you can pick another link if it fails.",
             store.get(AUTOPLAY_FIRST) == "true") { on -> store.put(AUTOPLAY_FIRST, on.toString()) }
-        settingsToggle(playback, "Auto-play size limit", "Auto-play skips links larger than your limit, so the biggest file it picks is at or under it. Links of unknown size can still play, and you can still choose any link yourself.",
+        settingsToggle(playback, "Auto-play limit", "Auto-play skips links above your bitrate limit (file size over the title's runtime). When the runtime is unknown, the movie or episode size limit applies. Links of unknown size can still play, and you can still choose any link yourself.",
             store.get(AUTOPLAY_LIMIT_ON) == "true") { on -> store.put(AUTOPLAY_LIMIT_ON, on.toString()); refreshSettings() }
-        if (store.get(AUTOPLAY_LIMIT_ON) == "true") settingsRow(playback, "Largest file for Auto-play", "${autoplayLimitGb()} GB", "Select to type a number of GB.") {
-            inputSetting("Largest file for Auto-play (GB)", "A whole number of GB, e.g. 20", autoplayLimitGb().toString()) { value ->
-                val gb = value.trim().toIntOrNull()
-                if (gb == null || gb !in 1..1000) toast("Enter a whole number of GB, such as 20")
-                else { store.put(AUTOPLAY_MAX_GB, gb.toString()); toast("Auto-play limited to $gb GB"); refreshSettings() }
+        if (store.get(AUTOPLAY_LIMIT_ON) == "true") {
+            settingsRow(playback, "Highest bitrate", "${autoplayMaxMbps()} Mbps", "For movies and episodes. Pick it from your internet speed, e.g. 25 Mbps on a 40 Mbps connection.") {
+                inputSetting("Highest bitrate for Auto-play (Mbps)", "A whole number of Mbps, e.g. 25", autoplayMaxMbps().toString()) { value ->
+                    val mbps = value.trim().toIntOrNull()
+                    if (mbps == null || mbps !in 1..500) toast("Enter a whole number of Mbps, such as 25")
+                    else { store.put(AUTOPLAY_MAX_MBPS, mbps.toString()); toast("Auto-play limited to $mbps Mbps"); refreshSettings() }
+                }
+            }
+            listOf(false to "Movie", true to "Episode").forEach { (episode, kind) ->
+                settingsRow(playback, "$kind size fallback", "${autoplayLimitGb(episode)} GB", "Used when the ${kind.lowercase()}'s runtime is unknown.") {
+                    inputSetting("Largest $kind file (GB)", "A whole number of GB, e.g. ${if (episode) 5 else 20}", autoplayLimitGb(episode).toString()) { value ->
+                        val gb = value.trim().toIntOrNull()
+                        if (gb == null || gb !in 1..1000) toast("Enter a whole number of GB, such as ${if (episode) 5 else 20}")
+                        else { store.put(if (episode) AUTOPLAY_MAX_GB_EPISODE else AUTOPLAY_MAX_GB, gb.toString()); toast("$kind size fallback set to $gb GB"); refreshSettings() }
+                    }
+                }
             }
         }
         val readAhead = ReadAheadPreferences(this)
@@ -3206,10 +3249,11 @@ class MainActivity : Activity() {
         body.addView(button("Try again") { current() }, margin(150, 40, bottom = 12))
     }
     /** Flix option: Continue Watching as wide resume cards (artwork plus an info panel) instead of regular cards. */
-    /** The saved size limit in GB (20 until the viewer types another). */
-    private fun autoplayLimitGb() = store.get(AUTOPLAY_MAX_GB).toIntOrNull()?.takeIf { it in 1..1000 } ?: 20
-    /** Largest file Auto-play may pick, in GB, or 0 when the limit is switched off. */
-    private fun autoplayMaxGb() = if (store.get(AUTOPLAY_LIMIT_ON) == "true") autoplayLimitGb() else 0
+    /** Size fallback in GB when the runtime is unknown: 20 for movies (the older single limit), 5 for episodes. */
+    private fun autoplayLimitGb(episode: Boolean) = store.get(if (episode) AUTOPLAY_MAX_GB_EPISODE else AUTOPLAY_MAX_GB)
+        .toIntOrNull()?.takeIf { it in 1..1000 } ?: if (episode) 5 else 20
+    /** Highest estimated bitrate Auto-play may pick, for movies and episodes alike. */
+    private fun autoplayMaxMbps() = store.get(AUTOPLAY_MAX_MBPS).toIntOrNull()?.takeIf { it in 1..500 } ?: 25
 
     private fun resumeCards() = flix && store.get(RESUME_CARDS) != "false"  // on unless the viewer turns it off
     private fun continueSlot() = margin(if (resumeCards()) (if (DeviceLayout.phone) 260 else RESUME_CARD_WIDTH) else cardWidth(), theme.layout.cardHeightDp, right = theme.layout.cardGapDp)
@@ -3283,6 +3327,15 @@ class MainActivity : Activity() {
                 runOnUiThread { if (!isDestroyed && trackerId() == service && wetrakr.accountRevision() == revision) { watched = state; refreshBadges() } }
             } catch (_: Exception) { /* Badges are a convenience; the next check retries. */ } finally { watchedLoading = false }
         }
+    }
+
+    /**
+     * After the player closes, Continue Watching is read again: once the pause or stop has had a moment to reach
+     * the tracker, and once more in case the service is slow to record it. The row updates in place.
+     */
+    private fun scheduleContinueRefresh() {
+        if (publicPreview || !::body.isInitialized) return
+        listOf(2_500L, 9_000L).forEach { delay -> body.postDelayed({ if (!isDestroyed) refreshContinue?.invoke() }, delay) }
     }
 
     /** A manual mark shows its badge straight away; the next service check confirms it. */

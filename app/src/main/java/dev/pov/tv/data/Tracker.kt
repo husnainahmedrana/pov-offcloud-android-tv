@@ -29,6 +29,8 @@ interface Tracker {
                         expectedScrobbleRevision: String = scrobbleRevision()): Boolean
 
     fun continueWatching(): List<Pair<PlaybackIdentity, Double>>
+    /** Forgets cached library reads, so the next one asks the service again (e.g. after the player closes). */
+    fun refreshCaches()
     fun removeContinueWatching(identity: PlaybackIdentity, revision: String = accountRevision())
     fun nextEpisodes(): List<PlaybackIdentity>
     fun watchlist(type: String): List<MediaItemData>
