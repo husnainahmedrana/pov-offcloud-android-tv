@@ -8,7 +8,11 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-/** Public native-client device flow. No client secret is accepted, stored, or bundled. */
+/**
+ * Public native-client device flow with POV Rajput's registered WeTrakr app. Its Client ID is public by
+ * design; no client secret is accepted, stored, or bundled. Requests made with a user's token count
+ * against that user's own WeTrakr quota, not the app's.
+ */
 class WeTrakrApi internal constructor(
     private val credentials: WeTrakrCredentials,
     private val transport: (String, String, Map<String, String>, JSONObject?) -> String = { path, method, headers, body -> Net.raw(BASE + path, method, headers, body) },
@@ -23,10 +27,11 @@ class WeTrakrApi internal constructor(
     private data class Pending(val auth: DeviceAuth, val client: String, val generation: Long, val started: Long, var lastPoll: Long, var interval: Long)
     @Volatile private var pending: Pending? = null
     private var attempt = 0L
-    fun configured() = validClientId(credentials.get("client_id"))
+    fun configured() = validClientId(clientId())
     fun connected() = configured() && credentials.get("access_token").isNotBlank() && credentials.get("reauth") != "true"
     fun accountRevision() = credentials.get("account_revision")
-    fun clientId() = credentials.get("client_id").trim().also { require(validClientId(it)) { "Set your WeTrakr application Client ID first." } }
+    /** Accounts linked with an older user-entered Client ID keep it until they disconnect; everyone else uses the app's. */
+    fun clientId() = credentials.get("client_id").trim().takeIf(::validClientId) ?: CLIENT_ID
     fun setClientId(value: String) = synchronized(stateLock) {
         val client = value.trim()
         require(validClientId(client)) { "Enter your registered WeTrakr application Client ID." }
@@ -36,7 +41,9 @@ class WeTrakrApi internal constructor(
         }
     }
     /** Local unlink is immediate; in-flight old responses cannot reconnect or replace tokens. */
-    fun disconnect() = synchronized(stateLock) { generation++; attempt++; pending = null; cache.clear(); credentials.put(emptyAccount()) }
+    fun disconnect() = synchronized(stateLock) {
+        generation++; attempt++; pending = null; cache.clear(); credentials.put(emptyAccount() + mapOf("client_id" to ""))
+    }
     fun cancelDeviceAuth(auth: DeviceAuth? = null) = synchronized(stateLock) {
         if (auth == null || pending?.auth?.deviceCode == auth.deviceCode) { attempt++; pending = null }
     }
@@ -168,8 +175,8 @@ class WeTrakrApi internal constructor(
         required(result, "access_token")
     }
     private fun call(path: String, method: String, body: JSONObject?, access: String? = null, appClient: String? = null): String {
-        val limitingClient = appClient ?: credentials.get("client_id")
-        if (appClient != null && appClient != credentials.get("client_id")) ended()
+        val limitingClient = appClient ?: clientId()
+        if (appClient != null && appClient != clientId()) ended()
         val until = credentials.get("retry_at").toLongOrNull() ?: 0
         if (now() < until) throw ApiException(429, "WeTrakr asked us to wait before making more requests.", retryAfterSeconds = ((until - now() + 999) / 1000).toInt())
         val headers = mutableMapOf("wetrakr-api-version" to "1")
@@ -179,7 +186,7 @@ class WeTrakrApi internal constructor(
             if (error.code == 429) {
                 val fallback = if (path == "/oauth/device/code") 900 else if (error.errorKey == "slow_down") 5 else 60
                 synchronized(stateLock) {
-                    if (credentials.get("client_id") == limitingClient)
+                    if (clientId() == limitingClient)
                         credentials.put(mapOf("retry_at" to (now() + maxOf(fallback, error.retryAfterSeconds) * 1000L).toString()))
                 }
             }
@@ -345,6 +352,8 @@ class WeTrakrApi internal constructor(
     private fun emptyAccount() = listOf("access_token", "refresh_token", "expires_at", "account_revision", "refresh_pending", "reauth").associateWith { "" }
     companion object {
         private const val BASE = "https://api.wetrakr.com"
+        /** POV Rajput's registered WeTrakr application (public identifier, not a secret). */
+        const val CLIENT_ID = "68a87ec819a3083e4884821c24ab8c0a"
         fun validClientId(value: String) = value.matches(Regex("[A-Za-z0-9_-]{16,256}"))
         private val stateLock = Any()
         private val refreshLock = Any()

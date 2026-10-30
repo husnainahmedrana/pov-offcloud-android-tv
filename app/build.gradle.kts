@@ -12,8 +12,8 @@ android {
         applicationId = "dev.pov.tv.rajput"
         minSdk = 26
         targetSdk = 35
-        versionCode = 33
-        versionName = "0.3.0-rajput"
+        versionCode = 34
+        versionName = "0.3.1-rajput"
         testInstrumentationRunner = providers.gradleProperty("povTestRunner")
             .orElse("dev.pov.tv.PlaybackAuditInstrumentation").get()
     }
@@ -82,6 +82,8 @@ dependencies {
     implementation("androidx.media3:media3-session:1.11.1")
     // Artwork only: HTTP/2 shares one connection per image server, with a disk cache for posters.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // QR code for device sign-in (encoder only).
+    implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16")
 }

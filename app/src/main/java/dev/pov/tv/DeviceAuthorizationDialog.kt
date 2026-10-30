@@ -3,12 +3,17 @@ package dev.pov.tv
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.DialogInterface
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.content.Intent
+import android.net.Uri
+import android.view.Gravity
 import android.view.View
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -43,6 +48,7 @@ internal class DeviceAuthorizationDialog(
     private lateinit var code: TextView
     private lateinit var status: TextView
     private lateinit var spinner: ProgressBar
+    private lateinit var qr: ImageView
 
     val isShowing: Boolean get() = dialog?.isShowing == true
 
@@ -57,9 +63,20 @@ internal class DeviceAuthorizationDialog(
         code = label(38).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); letterSpacing = 0.12f }
         status = label(15).apply { setTextColor(Color.LTGRAY) }
         spinner = ProgressBar(activity)
-        content.addView(message)
-        content.addView(address, params(12))
-        content.addView(code, params(14))
+        qr = ImageView(activity).apply { visibility = View.GONE; contentDescription = "QR code for the $service sign-in page" }
+        val details = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        details.addView(message)
+        details.addView(address, params(12))
+        details.addView(code, params(14))
+        // The QR sits beside the code on a TV and above it on a phone.
+        val row = LinearLayout(activity).apply {
+            orientation = if (DeviceLayout.phone) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(qr, LinearLayout.LayoutParams(dp(QR_DP), dp(QR_DP)).apply {
+            if (DeviceLayout.phone) { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(14) } else rightMargin = dp(24)
+        })
+        row.addView(details, if (DeviceLayout.phone) LinearLayout.LayoutParams(-1, -2) else LinearLayout.LayoutParams(0, -2, 1f))
+        content.addView(row, LinearLayout.LayoutParams(-1, -2))
         content.addView(status, params(14))
         content.addView(spinner, LinearLayout.LayoutParams(dp(34), dp(34)).apply { topMargin = dp(14) })
         val scroll = ScrollView(activity).apply { addView(content); isFillViewport = true }
@@ -96,7 +113,7 @@ internal class DeviceAuthorizationDialog(
         message.text = "Requesting a $service activation code…"
         message.setTextColor(Color.WHITE)
         address.text = ""; code.text = ""
-        address.visibility = View.GONE; code.visibility = View.GONE
+        address.visibility = View.GONE; code.visibility = View.GONE; qr.visibility = View.GONE
         status.text = "Keep this window open. This can take a few seconds."
         spinner.visibility = View.VISIBLE
         dialog?.getButton(DialogInterface.BUTTON_POSITIVE)?.visibility = View.GONE
@@ -111,8 +128,18 @@ internal class DeviceAuthorizationDialog(
             auth = value
             deadline = SystemClock.elapsedRealtime() + value.expiresSeconds * 1000L
             spinner.visibility = View.GONE
-            message.text = "On your phone or computer, visit this address and enter the code:"
+            message.text = if (DeviceLayout.phone) "Tap the address: the code is copied for you, so just paste it on the page."
+                else "Scan the QR code with your phone, or visit this address on any device, and enter the code:"
             address.text = value.verificationUrl; address.visibility = View.VISIBLE
+            // On a phone the code is copied and the sign-in page opens on the same device, ready to paste.
+            if (DeviceLayout.phone) {
+                address.setOnClickListener {
+                    copyCode(value.userCode)
+                    try { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(value.verificationUrl))) } catch (_: Exception) { }
+                }
+                code.setOnClickListener { copyCode(value.userCode) }
+            }
+            try { qr.setImageBitmap(qrBitmap(value.verificationUrl, dp(QR_DP))); qr.visibility = View.VISIBLE } catch (_: Exception) { qr.visibility = View.GONE }
             code.text = value.userCode; code.visibility = View.VISIBLE
             tick(request)
             schedulePoll(request, value.intervalSeconds * 1000L)
@@ -159,7 +186,7 @@ internal class DeviceAuthorizationDialog(
         if (!active) return
         cancelAttempt()
         spinner.visibility = View.GONE
-        address.visibility = View.GONE; code.visibility = View.GONE
+        address.visibility = View.GONE; code.visibility = View.GONE; qr.visibility = View.GONE
         message.text = "$service could not connect"
         message.setTextColor(Color.rgb(255, 185, 170))
         // Only our API's sanitized errors are shown; arbitrary exception messages can contain data.
@@ -204,4 +231,22 @@ internal class DeviceAuthorizationDialog(
     private fun label(size: Int) = TextView(activity).apply { textSize = size.toFloat(); setTextColor(Color.WHITE) }
     private fun params(top: Int) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) }
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
+
+    private fun copyCode(value: String) {
+        val clipboard = activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("$service code", value))
+        // Android 13+ shows its own copy confirmation.
+        if (android.os.Build.VERSION.SDK_INT < 33) android.widget.Toast.makeText(activity, "Code copied", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /** Black-on-white QR of the sign-in address, with a one-module quiet zone. */
+    private fun qrBitmap(text: String, size: Int): Bitmap {
+        val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size,
+            mapOf(com.google.zxing.EncodeHintType.MARGIN to 1))
+        val width = matrix.width; val height = matrix.height
+        val pixels = IntArray(width * height) { index -> if (matrix[index % width, index / width]) Color.BLACK else Color.WHITE }
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+    }
+
+    private companion object { const val QR_DP = 150 }
 }

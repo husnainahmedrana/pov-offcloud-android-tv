@@ -25,7 +25,7 @@ This is **Rajput's Android TV edition**, forked from [MM-482/pov-android-tv](htt
 - **Sensible defaults** — bold subtitles on a transparent background, 3% above the bottom, English subtitles and audio.
 - **Your library as posters** — Offcloud and TorBox downloads appear as artwork cards matched from their filenames.
 - **Voice search** — speak a title; the words appear as you talk and results open when you stop.
-- **Private by design** — every key, token and Client ID is entered on the TV and stored with Android Keystore encryption. Nothing personal is bundled in the source or APK.
+- **Private by design** — every key and token is entered on your device and stored with Android Keystore encryption. Nothing personal is bundled in the source or APK; the only built-in value is POV Rajput's public WeTrakr app Client ID.
 
 ## Screenshots
 
@@ -57,9 +57,9 @@ Captured on a 55" TV in the app's public preview mode, which shows public catalo
 2. **Settings → Debrid Services**: connect **Offcloud**, **TorBox** (sign in with a code or paste an API key), **Real-Debrid**, **AllDebrid**, **Premiumize** or **Debrid-Link** with your own API keys. Real-Debrid, AllDebrid and Debrid-Link have no up-front cache check, so the app tries the first 7 links when you play and plays the first cached one.
 3. **Settings → Debrid Services → Source providers**: add your preferred HTTPS Stremio-compatible add-ons, each with a name you choose. Without a debrid service, add-ons that return direct links still work.
 4. *Optional* — **Settings → Home & appearance → TMDB**: paste your free TMDB API key or read-access token from [themoviedb.org](https://www.themoviedb.org/settings/api), then pick a **Cinema country**.
-5. *Optional* — **Settings → WeTrakr**: enter your own registered Client ID and approve the activation code at **https://wetrakr.com/activate**.
+5. *Optional* — **Settings → WeTrakr → Connect**: scan the QR code (or visit **https://wetrakr.com/activate**) and enter the code shown. No Client ID or setup needed.
 
-No API key, token, Client ID or account is included in the app. Every value you enter stays encrypted on your device.
+No API key, token or account is included in the app. Every value you enter stays encrypted on your device.
 
 ## Using the app
 
@@ -107,7 +107,7 @@ Offcloud cached sources resolve directly without adding a dashboard entry. TorBo
 
 ## WeTrakr
 
-Enter your own registered Client ID, approve the code at **wetrakr.com/activate**, and WeTrakr supplies Home's Continue Watching (shown instantly from your last visit, then refreshed), watchlists, liked lists and Up Next. **Scrobbling** and **Liked lists on Home** are switches in Settings. Tokens are stored with Android Keystore encryption; library reads are cached and server retry limits are respected. API reference: [api.wetrakr.com](https://api.wetrakr.com/).
+Press Connect, scan the QR code or approve the code at **wetrakr.com/activate**, and WeTrakr supplies Home's Continue Watching (shown instantly from your last visit, then refreshed), watchlists, liked lists and Up Next. **Scrobbling** and **Liked lists on Home** are switches in Settings. Tokens are stored with Android Keystore encryption; library reads are cached and server retry limits are respected. API reference: [api.wetrakr.com](https://api.wetrakr.com/).
 
 ## Updates
 
@@ -115,7 +115,7 @@ Enter your own registered Client ID, approve the code at **wetrakr.com/activate*
 
 ## Privacy
 
-- API keys (Offcloud, TorBox, TMDB), the WeTrakr Client ID and tokens, and source-provider addresses are entered on the TV and encrypted with Android Keystore.
+- API keys (Offcloud, TorBox, TMDB), WeTrakr tokens and source-provider addresses are entered on your device and encrypted with Android Keystore. The app ships POV Rajput's public WeTrakr Client ID (no client secret); requests made with your WeTrakr sign-in count against your own WeTrakr quota.
 - Nothing personal is included in the repository or release APKs.
 - The microphone is used only while the voice-search screen is open.
 

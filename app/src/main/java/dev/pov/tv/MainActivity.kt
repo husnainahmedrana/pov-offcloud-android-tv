@@ -2910,7 +2910,6 @@ class MainActivity : Activity() {
         val tracking = settingsGroup("WeTrakr", "wetrakr")
         settingsRow(tracking, "Account", if (wetrakr.connected()) "Connected" else "Not connected",
             if (wetrakr.connected()) "Select to sign in again." else "Sign in with a code to sync watchlists and progress.", status = wetrakr.connected()) { startWeTrakr() }
-        settingsRow(tracking, "App Client ID", "", "From WeTrakr Settings → API. Device-code login needs no client secret.") { configureWeTrakr() }
         settingsToggle(tracking, "Scrobbling", "Automatic playback updates. Your library, Continue Watching and manual actions still work when this is off.",
             wetrakr.scrobblingEnabled(), contentLabel = "WeTrakr scrobbling") { on -> wetrakr.setScrobblingEnabled(on); wetrakrOutbox.clearPending() }
         settingsToggle(tracking, "Liked lists on Home", "Shows your liked WeTrakr lists as rows on Home.",
@@ -3122,16 +3121,10 @@ class MainActivity : Activity() {
     }
 
     private fun weTrakrClient() = wetrakr
+    /** Sign-in with an on-screen code and QR; the app's own WeTrakr Client ID is built in. */
     private fun startWeTrakr() {
-        if (!wetrakr.configured()) { configureWeTrakr(); return }
         authorize("WeTrakr", { wetrakr.startDeviceAuth() }, { wetrakr.pollDeviceAuth(it) },
-            cancel = { wetrakr.cancelDeviceAuth(it) }, configure = ::configureWeTrakr)
-    }
-    private fun configureWeTrakr() {
-        inputSetting("WeTrakr app Client ID", "Client ID from WeTrakr Settings → API", store.get("wetrakr.client_id")) { value ->
-            if (!WeTrakrApi.validClientId(value)) toast("Enter the registered WeTrakr application Client ID")
-            else { wetrakr.setClientId(value); wetrakrOutbox.clearPending(); remoteProgress.clear(); startWeTrakr() }
-        }
+            cancel = { wetrakr.cancelDeviceAuth(it) })
     }
 
     private fun startTorBox() { authorize("TorBox", { torbox.startDeviceAuth() }, { torbox.pollDeviceAuth(it) }, cancel = { torbox.cancelDeviceAuth(it) }) }
