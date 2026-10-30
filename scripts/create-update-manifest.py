@@ -19,5 +19,4 @@ metadata = {
     "versionName": re.search(r'versionName\s*=\s*"([^"]+)"', source).group(1),
     "sha256": hashlib.sha256(apk.read_bytes()).hexdigest(),
 }
-apk.with_name(manifest_name).write_text(json.dumps(metadata, indent=2) + "
-")
+apk.with_name(manifest_name).write_text(json.dumps(metadata, indent=2) + "\n")
