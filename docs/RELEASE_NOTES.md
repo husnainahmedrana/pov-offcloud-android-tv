@@ -1,9 +1,14 @@
-# POV Rajput 0.3.1
+# POV Rajput 0.3.2
 
-## WeTrakr: no Client ID needed
+## Subtitles
 
-- **Connect WeTrakr with just a code.** POV Rajput now has its own registered WeTrakr app built in, so you no longer create or paste a Client ID. Go to **Settings → WeTrakr → Connect** and approve the code.
-- **QR code on the sign-in screen.** Scan it with your phone to open WeTrakr's activate page, then enter the code shown on the TV. TorBox sign-in shows the QR code too.
-- **Phone app:** tap the address and the code is copied for you; the sign-in page opens, so just paste it. Tapping the code copies it as well.
-- Your WeTrakr requests count against your own WeTrakr account's quota. Only the app's public Client ID is built in; no client secret.
-- If you already connected with your own Client ID, you stay connected. After you disconnect, the next sign-in uses the built-in app.
+- **Subtitles show without picking a track.** Many files have a "Forced" subtitle track (signs and foreign lines only) marked as the default, so most dialogue had no text. When that track is chosen automatically and a full track in the same language exists, the full track is used. A subtitle you pick yourself is never changed.
+
+## Continue Watching
+
+- **Resumed videos show their file size and source badges** (size, WEB-DL, REMUX…). The file name and size are now saved with the link; links saved earlier get the size from the server when playback starts.
+- **Resuming works for add-on direct links too**, including plain HTTP links and links that need request headers. If a saved link has expired, a fresh source search starts as before.
+
+## TV
+
+- **Now playing is at the top of the menu**, above Home, while a video plays, and pressing Left opens the menu on it.

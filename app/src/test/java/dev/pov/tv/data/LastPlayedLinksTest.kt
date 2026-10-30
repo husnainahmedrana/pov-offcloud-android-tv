@@ -23,6 +23,18 @@ class LastPlayedLinksTest {
         f.time++
         assertNull(reopened.find(movie))
     }
+    @Test fun `file name and size are kept with the link`() {
+        val f = Fixture(); f.links.save(movie, "https://media.example.invalid/video", "key", "offcloud", name = "Example.2026.2160p.WEB-DL.mkv", size = 8_000_000_000L)
+        val reopened = LastPlayedLinks({ f.data[it].orEmpty() }, { key, value -> f.data[key] = value }, { f.time })
+        assertEquals("Example.2026.2160p.WEB-DL.mkv", reopened.find(movie)?.name)
+        assertEquals(8_000_000_000L, reopened.find(movie)?.size)
+        f.links.save(movie, "https://media.example.invalid/other", "key", "offcloud")
+        assertNull(reopened.find(movie)?.size)
+    }
+    @Test fun `plain HTTP add-on links and their request headers are kept`() {
+        val f = Fixture(); f.links.save(movie, "http://media.example.invalid/video", "key", null, headers = mapOf("Referer" to "https://site.example.invalid/"))
+        assertEquals("https://site.example.invalid/", f.links.find(movie)?.headers?.get("Referer"))
+    }
     @Test fun `credentials must still belong to the resolving service`() {
         val f = Fixture(); f.links.save(movie, "https://media.example.invalid/video", "key", "torbox")
         f.data["offcloud.key"] = "other-offcloud"
@@ -55,7 +67,7 @@ class LastPlayedLinksTest {
     }
     @Test fun `invalid URLs and clock rollback never replay a stored link`() {
         val f = Fixture()
-        for (url in listOf("http://media.example.invalid/video", "https://user:secret@media.example.invalid/video", "file:///video")) {
+        for (url in listOf("https://user:secret@media.example.invalid/video", "file:///video")) {
             f.links.save(movie, url, "key", null); assertNull(f.links.find(movie))
         }
         f.links.save(movie, "https://media.example.invalid/video", "key", null)

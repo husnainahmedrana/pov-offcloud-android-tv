@@ -61,6 +61,8 @@ object InAppPlaybackSession {
     private var sourceHeaders = emptyMap<String, String>()
     private var playbackAccount: String? = null
     private var lastLinkSaved = false
+    /** The automatic forced-subtitle check runs once per video. */
+    private var subtitlesChecked = false
     var debridService: String? = null
         private set
     private var identity: PlaybackIdentity? = null
@@ -84,6 +86,7 @@ object InAppPlaybackSession {
     private var backgroundPause = false
     private val listeners = linkedSetOf<() -> Unit>()
     private val handler = Handler(Looper.getMainLooper())
+    private const val MIN_SERVER_SIZE = 50L * 1024 * 1024
     private val surfaceAttachment = SurfaceReadyAttachment<ExoPlayer, PlayerView>(
         currentSession = { player?.takeUnless { releasing } },
         isReady = { view ->
@@ -170,6 +173,7 @@ object InAppPlaybackSession {
         debridService = PlaybackDebrid.normalize(saved?.getString("debrid_service") ?: intent.getStringExtra("debrid_service"))
         title = intent.getStringExtra("title").orEmpty()
         if (saved == null) SubtitleSync.reset()
+        subtitlesChecked = saved != null
         mediaName = intent.getStringExtra("media_name").orEmpty().take(4000)
         mediaSize = intent.getLongExtra("media_size", 0L).takeIf { it > 0 }
         identity = try { intent.getStringExtra("identity")?.let { PlaybackIdentity.fromJson(JSONObject(it)) } } catch (_: Exception) { null }
@@ -230,7 +234,9 @@ object InAppPlaybackSession {
         }
         // Direct links often redirect http <-> https (e.g. 307 to a CDN); ExoPlayer refuses
         // cross-protocol redirects by default, while Stremio and VLC follow them.
+        val playing = sourceUrl
         val http = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)
+            .setTransferListener(sizeFromServer(playing))
             .setDefaultRequestProperties(sourceHeaders)
         val exo = ExoPlayer.Builder(application!!, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(application!!, http)))
@@ -256,6 +262,7 @@ object InAppPlaybackSession {
             }
             override fun onTracksChanged(tracks: Tracks) {
                 if (!isCurrent(exo) || enforceVideoCompatibility(exo, tracks)) return
+                preferFullSubtitles(exo, tracks)
                 notifyChanged()
             }
             override fun onTrackSelectionParametersChanged(parameters: TrackSelectionParameters) {
@@ -289,9 +296,9 @@ object InAppPlaybackSession {
                 if (state == Player.STATE_READY && !lastLinkSaved) {
                     lastLinkSaved = true
                     val media = identity; val account = playbackAccount
-                    // Header-bound links carry short-lived cookies; a fresh source search is safer than replaying them.
-                    if (media != null && account != null && sourceHeaders.isEmpty()) runCatching {
-                        dev.pov.tv.data.LastPlayedLinks(SecureStore(application!!)).save(media, sourceUrl, sourceKey, debridService, account)
+                    // Header-bound links keep their headers; if those have expired, resuming falls back to a fresh search.
+                    if (media != null && account != null) runCatching {
+                        dev.pov.tv.data.LastPlayedLinks(SecureStore(application!!)).save(media, sourceUrl, sourceKey, debridService, account, mediaName, mediaSize, sourceHeaders)
                     }
                 }
                 if (state == Player.STATE_READY && remotePercent > 0 && exo.duration > 0) {
@@ -425,6 +432,54 @@ object InAppPlaybackSession {
     }
 
     private fun isCurrent(exo: ExoPlayer) = !releasing && player === exo
+
+    /**
+     * Without a known size (a link saved before sizes were kept), the size the server reports for the video file
+     * itself fills the badge. Playlists and subtitles are other addresses, and anything under 50 MB is ignored.
+     */
+    private fun sizeFromServer(playing: String) = object : androidx.media3.datasource.TransferListener {
+        override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) {}
+        override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) {
+            if (mediaSize != null || dataSpec.uri.toString() != playing) return
+            val headers = (source as? androidx.media3.datasource.HttpDataSource)?.responseHeaders ?: return
+            fun header(name: String) = headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+            // "Content-Range: bytes 0-1023/4567890" carries the whole file's size; otherwise a full response's length.
+            val total = header("Content-Range")?.substringAfterLast('/')?.trim()?.toLongOrNull()
+                ?: header("Content-Length")?.trim()?.toLongOrNull()?.takeIf { dataSpec.position == 0L }
+            if (total == null || total < MIN_SERVER_SIZE) return
+            handler.post { if (sourceUrl == playing && mediaSize == null) { mediaSize = total; notifyChanged() } }
+        }
+        override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) {}
+        override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) {}
+    }
+
+    /**
+     * Files often carry a "Forced" subtitle track (signs and foreign lines only) marked as the default, which
+     * the player then prefers over the full track in the same language, so most dialogue shows no text.
+     * When the automatic choice is forced and a full track in that language exists, the full track is used.
+     * A subtitle the viewer picked is never changed.
+     */
+    private fun preferFullSubtitles(exo: ExoPlayer, tracks: Tracks) {
+        if (subtitlesChecked) return
+        val text = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        if (text.isEmpty()) return
+        subtitlesChecked = true
+        text.forEach { group -> (0 until group.length).forEach { index -> val format = group.getTrackFormat(index)
+            android.util.Log.i("PovSubtitles", "track lang=${format.language} label=${format.label} flags=${format.selectionFlags} " +
+                "mime=${format.sampleMimeType ?: format.codecs} supported=${group.isTrackSupported(index)} selected=${group.isTrackSelected(index)}") } }
+        val parameters = exo.trackSelectionParameters
+        if (C.TRACK_TYPE_TEXT in parameters.disabledTrackTypes || parameters.overrides.keys.any { it.type == C.TRACK_TYPE_TEXT }) return
+        fun forced(format: Format) = format.selectionFlags and C.SELECTION_FLAG_FORCED != 0 || format.label?.contains("forced", ignoreCase = true) == true
+        val chosen = text.firstNotNullOfOrNull { group -> (0 until group.length).firstOrNull(group::isTrackSelected)?.let { group.getTrackFormat(it) } } ?: return
+        if (!forced(chosen)) return
+        val full = text.flatMap { group -> (0 until group.length).map { group to it } }.firstOrNull { (group, index) ->
+            val format = group.getTrackFormat(index)
+            group.isTrackSupported(index) && !forced(format) && (chosen.language == null || format.language == chosen.language)
+        } ?: return
+        android.util.Log.i("PovSubtitles", "forced track was chosen; using the full ${chosen.language} track instead")
+        exo.trackSelectionParameters = parameters.buildUpon()
+            .setOverrideForType(androidx.media3.common.TrackSelectionOverride(full.first.mediaTrackGroup, full.second)).build()
+    }
     private fun observeSurfaceReadiness(view: PlayerView, ready: () -> Unit): () -> Unit {
         val holder = (view.videoSurfaceView as? SurfaceView)?.holder
         val surfaceCallback = object : SurfaceHolder.Callback {

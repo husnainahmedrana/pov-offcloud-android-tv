@@ -179,7 +179,7 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
     @Deprecated("Android TV Back handling") override fun onBackPressed() {
-        if (DeviceLayout.phone && backStack.isEmpty() && destination != "home") { openDestination(destinations().first()); return }
+        if (DeviceLayout.phone && backStack.isEmpty() && destination != "home") { openDestination(destinations().first { it.key == "home" }); return }
         // Flix: content → menu → exit; other top-level pages return straight to Home.
         if (flix && DeviceLayout.tv && backStack.isEmpty()) {
             val inMenu = navigationViews.values.any { it.hasFocus() }
@@ -326,7 +326,7 @@ class MainActivity : Activity() {
             if (body.hasFocus() && direction != null && focusController.next(direction) == null) {
                 val leaving = (theme.layout.navigation == NavigationPlacement.TOP_BAR && direction == View.FOCUS_UP) ||
                     (theme.layout.navigation == NavigationPlacement.LEFT_RAIL && direction == View.FOCUS_LEFT)
-                if (leaving && (if (flix) openMenu() else navigationViews[destination]?.requestFocus() == true)) {
+                if (leaving && (if (flix) openMenu() else (navigationViews["nowplaying"] ?: navigationViews[destination])?.requestFocus() == true)) {
                     if (direction == View.FOCUS_UP) scroller.scrollTo(0, 0)
                     return true
                 }
@@ -341,12 +341,17 @@ class MainActivity : Activity() {
     }
 
     private data class Destination(val key: String, val label: String, val screen: () -> Unit)
-    private fun destinations() = listOf(
-        Destination("home", "Home") { home() }, Destination("movie", "Movies") { catalogPage("movie") },
-        Destination("series", "Shows") { catalogPage("series") }, Destination("anime", "Anime") { animePage() },
-        Destination("library", "Library") { selectedCloud() }, Destination("search", "Search") { search() },
-        Destination("wetrakr", "WeTrakr") { weTrakrPage() }, Destination("settings", "Settings") { settings() }) +
-        if (!publicPreview && InAppPlaybackSession.hasActive()) listOf(Destination("nowplaying", "Now playing") { returnToVideo() }) else emptyList()
+    /** On TV, Now playing heads the menu so the video is one press away; the phone's tab bar keeps it last. */
+    private fun destinations(): List<Destination> {
+        val pages = listOf(
+            Destination("home", "Home") { home() }, Destination("movie", "Movies") { catalogPage("movie") },
+            Destination("series", "Shows") { catalogPage("series") }, Destination("anime", "Anime") { animePage() },
+            Destination("library", "Library") { selectedCloud() }, Destination("search", "Search") { search() },
+            Destination("wetrakr", "WeTrakr") { weTrakrPage() }, Destination("settings", "Settings") { settings() })
+        if (publicPreview || !InAppPlaybackSession.hasActive()) return pages
+        val playing = Destination("nowplaying", "Now playing") { returnToVideo() }
+        return if (DeviceLayout.tv) listOf(playing) + pages else pages + playing
+    }
 
     /** Status bar height on the phone (0 on TV), added to each page's top padding. */
     private var systemTop = 0
@@ -856,7 +861,8 @@ class MainActivity : Activity() {
     /** Android refuses focus to zero-width views, so the hidden menu opens before taking focus. */
     private fun openMenu(): Boolean {
         val view = rail ?: return false
-        val target = navigationViews[destination] ?: navigationViews["home"] ?: return false
+        // While a video plays, the menu opens on Now playing so it is one press away.
+        val target = navigationViews["nowplaying"] ?: navigationViews[destination] ?: navigationViews["home"] ?: return false
         setRailExpanded(true, animate = false)
         fun attempt() { if (!target.requestFocus()) setRailExpanded(false) }
         // Focus only once the widened menu has been laid out; until then its items have no size.
@@ -1261,7 +1267,9 @@ class MainActivity : Activity() {
         val link = LastPlayedLinks(store).find(identity)
         if (link == null) { navigate { showSources(identity) }; return }
         cachedPlayback = identity
-        play(link.url, identity.title, identity, link.key, link.service, resumeImmediately = true)
+        // The saved file name and size give the resumed video its badges.
+        playingMedia = link.name to link.size
+        play(link.url, identity.title, identity, link.key, link.service, resumeImmediately = true, headers = link.headers)
     }
     private fun retainedRoots(): List<View> = listOf(body) + backStack.flatMap { it.retained?.children.orEmpty() }
     private fun hideContinue(marker: String) {
@@ -1449,15 +1457,15 @@ class MainActivity : Activity() {
             return
         }
         val host = navigationViews["home"]?.parent as? LinearLayout ?: return
-        val lastNavigation = (0 until host.childCount).lastOrNull {
-            (host.getChildAt(it).tag as? String)?.startsWith("nav:") == true
-        } ?: return
+        val navigationIndexes = (0 until host.childCount).filter { (host.getChildAt(it).tag as? String)?.startsWith("nav:") == true }
+        if (navigationIndexes.isEmpty()) return
         val top = theme.layout.navigation == NavigationPlacement.TOP_BAR
         val bottom = theme.layout.navigation == NavigationPlacement.BOTTOM_BAR
         val target = Destination("nowplaying", "Now playing") { returnToVideo() }
         val cell = if (bottom) bottomNavigation(target) else navigation(target, top)
         val params = if (bottom) LinearLayout.LayoutParams(0, -1, 1f) else if (top) LinearLayout.LayoutParams(0, dp(38), 1f) else margin(-1, 35, bottom = 4)
-        host.addView(cell, lastNavigation + 1, params)
+        // TV: above Home; phone: the last tab.
+        host.addView(cell, if (DeviceLayout.tv) navigationIndexes.first() else navigationIndexes.last() + 1, params)
     }
 
     private fun contentBottomPadding() = dp(if (!publicPreview && InAppPlaybackSession.hasActive()) (if (DeviceLayout.phone) 120 else 184) else 24)
