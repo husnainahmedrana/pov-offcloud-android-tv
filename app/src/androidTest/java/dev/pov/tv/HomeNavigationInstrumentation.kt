@@ -38,7 +38,7 @@ class HomeNavigationInstrumentation : Instrumentation() {
         val savedKeys = encryptedKeys.associateWith { store.has(it) to store.get(it) }
         val preferences = targetContext.getSharedPreferences("playback", 0)
         val savedPlayback = preferences.all.toMap()
-        val trackerField = InAppPlaybackSession::class.java.getDeclaredField("wetrakr").apply { isAccessible = true }
+        val trackerField = InAppPlaybackSession::class.java.getDeclaredField("weTrakrApi").apply { isAccessible = true }
         var previousTracker: Any? = null
         try {
             app = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -84,8 +84,8 @@ class HomeNavigationInstrumentation : Instrumentation() {
             main {
                 previousTracker = trackerField.get(InAppPlaybackSession); trackerField.set(InAppPlaybackSession, tracker)
                 store.remove("wetrakr.home_liked_opt_in")
-                field("wetrakr").set(activity, tracker); field("catalog").set(activity, catalog); field("resolver").set(activity, sourceApi)
-                field("publicPreview").setBoolean(activity, false); field("theme").set(activity, ThemeSpec.EDITORIAL); call("shell"); call("home")
+                field("weTrakrApi").set(activity, tracker); field("catalog").set(activity, catalog); field("resolver").set(activity, sourceApi)
+                field("publicPreview").setBoolean(activity, false); field("theme").set(activity, ThemeSpec.FLIX); call("shell"); call("home")
             }
             val shelfNames = listOf("New Movies", "New Shows", "Featured Movies", "Featured Shows", "Popular Movies", "Popular Shows")
             fun awaitHome() = await { settled() && main { shelfNames.all { label -> views(body()).any { it.tag == "shelf:$label" } } } }

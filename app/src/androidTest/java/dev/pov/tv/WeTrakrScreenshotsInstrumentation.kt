@@ -63,7 +63,7 @@ class WeTrakrScreenshotsInstrumentation : Instrumentation() {
             val app = activity
             fun field(name: String) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }
             fun call(name: String) = MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(app)
-            val names = listOf("theme", "publicPreview", "wetrakr", "catalog")
+            val names = listOf("theme", "publicPreview", "weTrakrApi", "catalog")
             val original = main { names.associateWith { field(it).get(app) } }
             fun await(test: () -> Boolean) {
                 val until = SystemClock.elapsedRealtime() + 30000
@@ -85,8 +85,8 @@ class WeTrakrScreenshotsInstrumentation : Instrumentation() {
             }
             try {
                 store.remove("wetrakr.home_liked_opt_in")
-                main { ThemePreferences(targetContext).select(ThemeSpec.EDITORIAL) }
-                main { field("theme").set(app, ThemeSpec.EDITORIAL); field("publicPreview").set(app, false); field("wetrakr").set(app, client); field("catalog").set(app, catalog); call("shell"); call("weTrakrPage") }
+                main { ThemePreferences(targetContext).select(ThemeSpec.FLIX) }
+                main { field("theme").set(app, ThemeSpec.FLIX); field("publicPreview").set(app, false); field("weTrakrApi").set(app, client); field("catalog").set(app, catalog); call("shell"); call("weTrakrPage") }
                 stage = "library"
                 await { main { tagged("wetrakr-section-liked")?.let { views(it).filterIsInstance<TextView>().any { text -> text.text.contains("Sample favourites") } } == true } }
                 capture("wetrakr-library")

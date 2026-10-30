@@ -22,11 +22,9 @@ class ThemePreferencesTest {
         assertEquals(ThemeSpec.FLIX, ThemePreferences(context).selected())
     }
 
-    @Test fun `every theme choice survives creating a new preference owner`() {
-        for (theme in ThemeSpec.entries) {
-            ThemePreferences(context).select(theme)
-            assertEquals(theme, ThemePreferences(context).selected())
-        }
+    @Test fun `a saved Editorial choice from before its retirement opens Flix`() {
+        context.getSharedPreferences("pov_appearance", Context.MODE_PRIVATE).edit().putString("theme", "editorial").commit()
+        assertEquals(ThemeSpec.FLIX, ThemePreferences(context).selected())
     }
 
     @Test fun `unknown stored theme safely falls back without changing other preferences`() {

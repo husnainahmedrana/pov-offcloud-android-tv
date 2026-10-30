@@ -18,8 +18,8 @@ class WeTrakrApi internal constructor(
     private val transport: (String, String, Map<String, String>, JSONObject?) -> String = { path, method, headers, body -> Net.raw(BASE + path, method, headers, body) },
     private val now: () -> Long = System::currentTimeMillis,
     private val elapsed: () -> Long = SystemClock::elapsedRealtime
-) {
-    val name = "WeTrakr"
+) : Tracker {
+    override val name = "WeTrakr"
     constructor(store: SecureStore) : this(object : WeTrakrCredentials {
         override fun get(key: String) = store.get("wetrakr.$key")
         override fun put(values: Map<String, String>) = store.putAll(values.mapKeys { "wetrakr.${it.key}" })
@@ -28,8 +28,8 @@ class WeTrakrApi internal constructor(
     @Volatile private var pending: Pending? = null
     private var attempt = 0L
     fun configured() = validClientId(clientId())
-    fun connected() = configured() && credentials.get("access_token").isNotBlank() && credentials.get("reauth") != "true"
-    fun accountRevision() = credentials.get("account_revision")
+    override fun connected() = configured() && credentials.get("access_token").isNotBlank() && credentials.get("reauth") != "true"
+    override fun accountRevision() = credentials.get("account_revision")
     /** Accounts linked with an older user-entered Client ID keep it until they disconnect; everyone else uses the app's. */
     fun clientId() = credentials.get("client_id").trim().takeIf(::validClientId) ?: CLIENT_ID
     fun setClientId(value: String) = synchronized(stateLock) {
@@ -41,13 +41,13 @@ class WeTrakrApi internal constructor(
         }
     }
     /** Local unlink is immediate; in-flight old responses cannot reconnect or replace tokens. */
-    fun disconnect() = synchronized(stateLock) {
+    override fun disconnect(): Unit = synchronized(stateLock) {
         generation++; attempt++; pending = null; cache.clear(); credentials.put(emptyAccount() + mapOf("client_id" to ""))
     }
-    fun cancelDeviceAuth(auth: DeviceAuth? = null) = synchronized(stateLock) {
+    override fun cancelDeviceAuth(auth: DeviceAuth?): Unit = synchronized(stateLock) {
         if (auth == null || pending?.auth?.deviceCode == auth.deviceCode) { attempt++; pending = null }
     }
-    fun startDeviceAuth(): DeviceAuth {
+    override fun startDeviceAuth(): DeviceAuth {
         val (client, version, request) = synchronized(stateLock) { pending = null; Triple(clientId(), generation, ++attempt) }
         val start = elapsed()
         val result = objectCall("/oauth/device/code", JSONObject().put("client_id", client))
@@ -64,7 +64,7 @@ class WeTrakrApi internal constructor(
         }
         return auth
     }
-    @Synchronized fun pollDeviceAuth(auth: DeviceAuth): Boolean {
+    @Synchronized override fun pollDeviceAuth(auth: DeviceAuth): Boolean {
         val state = synchronized(stateLock) { pending?.takeIf { it.auth.deviceCode == auth.deviceCode && it.generation == generation && it.client == clientId() } ?: ended() }
         val time = elapsed()
         if (time - state.started >= auth.expiresSeconds * 1000L) { cancelDeviceAuth(auth); ended() }
@@ -84,15 +84,15 @@ class WeTrakrApi internal constructor(
         }
         return true
     }
-    fun scrobblingEnabled() = credentials.get("scrobbling") != "false"
-    fun scrobbleRevision() = credentials.get("scrobble_revision")
-    fun setScrobblingEnabled(enabled: Boolean) = synchronized(stateLock) {
+    override fun scrobblingEnabled() = credentials.get("scrobbling") != "false"
+    override fun scrobbleRevision() = credentials.get("scrobble_revision")
+    override fun setScrobblingEnabled(enabled: Boolean): Unit = synchronized(stateLock) {
         credentials.put(mapOf("scrobbling" to enabled.toString(), "scrobble_revision" to UUID.randomUUID().toString()))
     }
     private fun suppressionKey(identity: PlaybackIdentity) = "suppressed.${identity.type}.${identity.imdbId}.${identity.season}.${identity.episode}"
-    fun allowPlayback(identity: PlaybackIdentity) = synchronized(stateLock) { credentials.put(mapOf(suppressionKey(identity) to "")) }
+    override fun allowPlayback(identity: PlaybackIdentity): Unit = synchronized(stateLock) { credentials.put(mapOf(suppressionKey(identity) to "")) }
     /** Cancel exactly this title's session. Never delete watched plays or another device's current title. */
-    fun removeContinueWatching(identity: PlaybackIdentity, revision: String = accountRevision()) = synchronized(refreshLock) {
+    override fun removeContinueWatching(identity: PlaybackIdentity, revision: String): Unit = synchronized(refreshLock) {
         if (revision.isBlank() || accountRevision() != revision || !connected()) ended()
         validate(identity)
         val body = playbackBody(identity)
@@ -109,15 +109,15 @@ class WeTrakrApi internal constructor(
         }
         cache.clear()
     }
-    fun likedLists(): List<Pair<String, String>> = pages("/sync/likes/lists", paginated = false).mapNotNull { entry ->
+    override fun likedLists(): List<Pair<String, String>> = pages("/sync/likes/lists", paginated = false).mapNotNull { entry ->
         val list = entry.optJSONObject("list") ?: return@mapNotNull null
         list.optString("id").takeIf { it.matches(Regex("[1-9][0-9]{0,18}")) }?.let { it to list.optString("name", "List") }
     }.distinctBy { it.first }
-    fun likedListItems(id: String): List<MediaItemData> {
+    override fun likedListItems(id: String): List<MediaItemData> {
         require(id.matches(Regex("[1-9][0-9]{0,18}"))) { "Invalid WeTrakr list." }
         return pages("/lists/$id/items/all").mapNotNull(::media)
     }
-    fun likedListPreview(id: String): List<MediaItemData> {
+    override fun likedListPreview(id: String): List<MediaItemData> {
         require(id.matches(Regex("[1-9][0-9]{0,18}"))) { "Invalid WeTrakr list." }
         val path = "/lists/$id/items/all?page=1&limit=20"
         val key = "${accountRevision()}:$path"
@@ -221,7 +221,7 @@ class WeTrakrApi internal constructor(
         throw ApiException(0, "This WeTrakr list is too large to load at once. Open it on the website.")
     }
     /** Only an owned/collaborated list selected by the user can be edited. */
-    fun removeListItem(listId: String, identity: PlaybackIdentity) {
+    override fun removeListItem(listId: String, identity: PlaybackIdentity) {
         require(listId.matches(Regex("[A-Za-z0-9_-]{1,80}")))
         require(identity.imdbId.matches(Regex("tt[0-9]{5,12}")) && identity.type in setOf("movie", "series"))
         val target = if (identity.type == "movie") "movies" else "shows"
@@ -233,19 +233,19 @@ class WeTrakrApi internal constructor(
         }
         cache.clear()
     }
-    fun watchlist(type: String): List<MediaItemData> {
+    override fun watchlist(type: String): List<MediaItemData> {
         require(type in setOf("movie", "series")) { "Invalid WeTrakr watchlist type." }
         return pages("/sync/tracking/planning/${if (type == "movie") "movies" else "shows"}").mapNotNull(::media)
     }
-    fun lists(): List<Pair<String, String>> = pages("/sync/lists").mapNotNull { record ->
+    override fun lists(): List<Pair<String, String>> = pages("/sync/lists").mapNotNull { record ->
         record.optString("id").takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,80}")) }?.let { it to record.optString("name", "List") }
     }
-    fun listItems(id: String): List<MediaItemData> {
+    override fun listItems(id: String): List<MediaItemData> {
         require(id.matches(Regex("[A-Za-z0-9_-]{1,80}"))) { "Invalid WeTrakr list." }
         return pages("/sync/lists/$id/items").mapNotNull(::media)
     }
     /** Movies and episodes are fetched side by side; token refresh is already serialized. */
-    fun continueWatching(): List<Pair<PlaybackIdentity, Double>> {
+    override fun continueWatching(): List<Pair<PlaybackIdentity, Double>> {
         val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
         try {
             return listOf("movies", "episodes").map { kind -> pool.submit(java.util.concurrent.Callable {
@@ -259,7 +259,7 @@ class WeTrakrApi internal constructor(
             }
         } finally { pool.shutdownNow() }
     }
-    fun nextEpisodes(): List<PlaybackIdentity> = pages("/sync/tracking/watching/shows?extended=episode_level_1").mapNotNull { show ->
+    override fun nextEpisodes(): List<PlaybackIdentity> = pages("/sync/tracking/watching/shows?extended=episode_level_1").mapNotNull { show ->
         val next = show.optJSONObject("next_watching_episode") ?: return@mapNotNull null
         identity(next, show)
     }
@@ -279,8 +279,8 @@ class WeTrakrApi internal constructor(
         fun image(key: String) = item.optString(key).takeIf { it.startsWith('/') }?.let { "https://image.tmdb.org/t/p/w500$it" }.orEmpty()
         return MediaItemData(id, type, title, item.optString(if (type == "movie") "release_date" else "first_air_date").take(4), image("poster_path"), image("backdrop_path"))
     }
-    fun setWatchlist(identity: PlaybackIdentity, add: Boolean) = tracking(identity, "planning", remove = !add)
-    fun markWatched(identity: PlaybackIdentity) = tracking(identity, "watched")
+    override fun setWatchlist(identity: PlaybackIdentity, add: Boolean) { tracking(identity, "planning", remove = !add) }
+    override fun markWatched(identity: PlaybackIdentity) { tracking(identity, "watched") }
     private fun tracking(identity: PlaybackIdentity, status: String, remove: Boolean = false, percent: Double? = null, timestamp: String? = null, replay: Boolean = false) = synchronized(refreshLock) {
         val item = JSONObject().put("ids", JSONObject().put("imdb", identity.imdbId)).put("status", status)
         val body = trackingBody(identity, item, status, percent, timestamp).put("allow_rewatch", false)
@@ -317,7 +317,7 @@ class WeTrakrApi internal constructor(
         return JSONObject().put(if (identity.type == "movie") "movies" else "shows", JSONArray().put(item))
     }
     /** Retry stored final state without restarting an old now-playing session. */
-    fun restoreProgress(identity: PlaybackIdentity, percent: Double, action: String, timestamp: String, revision: String, expectedScrobbleRevision: String = scrobbleRevision()): Boolean = synchronized(refreshLock) {
+    override fun restoreProgress(identity: PlaybackIdentity, percent: Double, action: String, timestamp: String, revision: String, expectedScrobbleRevision: String): Boolean = synchronized(refreshLock) {
         if (!connected() || !scrobblingEnabled() || credentials.get(suppressionKey(identity)) == revision || revision.isBlank() || accountRevision() != revision) return false
         if (expectedScrobbleRevision != scrobbleRevision()) return false
         require(percent.isFinite() && percent in 0.0..100.0 && action in setOf("pause", "stop"))
@@ -327,7 +327,7 @@ class WeTrakrApi internal constructor(
         tracking(identity, if (watched) "watched" else "paused", percent = if (watched) null else percent.coerceIn(0.01, 99.99), timestamp = timestamp, replay = true)
         true
     }
-    fun progressForAccount(identity: PlaybackIdentity, percent: Double, action: String, revision: String, expectedScrobbleRevision: String = scrobbleRevision()): Boolean = synchronized(refreshLock) {
+    override fun progressForAccount(identity: PlaybackIdentity, percent: Double, action: String, revision: String, expectedScrobbleRevision: String): Boolean = synchronized(refreshLock) {
         if (!connected() || !scrobblingEnabled() || credentials.get(suppressionKey(identity)) == revision || revision.isBlank() || accountRevision() != revision) return false
         if (expectedScrobbleRevision != scrobbleRevision()) return false
         validate(identity); require(percent.isFinite() && action in setOf("start", "pause", "stop"))

@@ -3,8 +3,8 @@ package dev.pov.tv
 import android.content.Context
 
 /**
- * The two layouts: Flix (living backdrop, left menu, landscape shelves) and Editorial (light canvas,
- * split feature, poster collection). Dimensions use a 960 x 540 logical canvas scaled to the screen.
+ * Flix: living backdrop, left menu, landscape shelves (the Editorial theme was retired in 0.3.3).
+ * Dimensions use a 960 x 540 logical canvas scaled to the screen.
  * Theme changes contain presentation only; account and playback state are separate.
  */
 enum class ThemeSpec(
@@ -33,27 +33,6 @@ enum class ThemeSpec(
             cardGapDp = 9, cornerRadiusDp = 4, titleSizeSp = 46,
             titleTypeface = "sans-serif-black", titleLetterSpacing = 0f,
             sectionTitleSizeSp = 15, focusScale = 1.09f,
-        ),
-    ),
-    EDITORIAL(
-        id = "editorial",
-        displayName = "Editorial",
-        description = "An ivory canvas, a split feature, and a clean poster collection.",
-        palette = ThemePalette(
-            background = 0xFFFFFCF7.toInt(), panel = 0xFFF0EDE7.toInt(),
-            text = 0xFF12203F.toInt(), muted = 0xFF656970.toInt(),
-            accent = 0xFF6AD7FF.toInt(), secondaryAccent = 0xFFAD33ED.toInt(),
-            buttonText = 0xFFF9FCFF.toInt(), border = 0xFFDAD9D5.toInt(),
-            navSelected = 0xFFEEE8F8.toInt(), progress = 0xFF6AD7FF.toInt(),
-            primaryButton = 0xFF16264B.toInt(),
-        ),
-        tvLayout = ThemeLayout(
-            navigation = NavigationPlacement.TOP_BAR, hero = HeroComposition.SPLIT,
-            cards = CardFormat.POSTER, contentInsetDp = 34, railWidthDp = 0,
-            headerHeightDp = 59, heroHeightDp = 225, cardWidthDp = 170, cardHeightDp = 197,
-            cardGapDp = 11, cornerRadiusDp = 8, titleSizeSp = 44,
-            titleTypeface = "sans-serif-condensed", titleLetterSpacing = 0.12f,
-            sectionTitleSizeSp = 17, focusScale = 1.018f,
         ),
     );
 
@@ -113,8 +92,8 @@ class ThemePreferences(context: Context) {
     private val preferences = context.applicationContext
         .getSharedPreferences("pov_appearance", Context.MODE_PRIVATE)
 
-    // The phone layouts are built for Flix only.
-    fun selected(): ThemeSpec = if (DeviceLayout.phone) ThemeSpec.FLIX else ThemeSpec.fromId(preferences.getString(KEY, null))
+    // Flix is the only theme; an older saved choice (such as "editorial") falls back to it.
+    fun selected(): ThemeSpec = ThemeSpec.fromId(preferences.getString(KEY, null))
 
     fun select(theme: ThemeSpec) {
         preferences.edit().putString(KEY, theme.id).apply()

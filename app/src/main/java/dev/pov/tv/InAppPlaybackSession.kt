@@ -54,8 +54,15 @@ object InAppPlaybackSession {
     private var mediaSession: MediaSession? = null
     private var targetView: WeakReference<PlayerView>? = null
     private lateinit var history: PlaybackStore
-    private lateinit var wetrakr: WeTrakrApi
-    private lateinit var wetrakrOutbox: PlaybackStore
+    private lateinit var secureStore: SecureStore
+    private lateinit var weTrakrApi: WeTrakrApi
+    private lateinit var simklApi: dev.pov.tv.data.SimklApi
+    private lateinit var weTrakrOutbox: PlaybackStore
+    private lateinit var simklOutbox: PlaybackStore
+    /** Scrobbles go to the tracker chosen in Settings, each with its own offline queue. */
+    private val simklSelected get() = dev.pov.tv.data.Trackers.selected(secureStore) == dev.pov.tv.data.Trackers.SIMKL
+    private val wetrakr: dev.pov.tv.data.Tracker get() = if (simklSelected) simklApi else weTrakrApi
+    private val wetrakrOutbox: PlaybackStore get() = if (simklSelected) simklOutbox else weTrakrOutbox
     private var sourceUrl = ""
     private var sourceKey = ""
     private var sourceHeaders = emptyMap<String, String>()
@@ -140,8 +147,10 @@ object InAppPlaybackSession {
         val app = context.applicationContext as Application
         application = app
         history = PlaybackStore(app)
-        wetrakr = WeTrakrApi(SecureStore(app))
-        wetrakrOutbox = PlaybackStore(app, "wetrakr.pending")
+        secureStore = SecureStore(app)
+        weTrakrApi = WeTrakrApi(secureStore); simklApi = dev.pov.tv.data.SimklApi(secureStore)
+        weTrakrOutbox = PlaybackStore(app, dev.pov.tv.data.Trackers.outboxKey(dev.pov.tv.data.Trackers.WETRAKR))
+        simklOutbox = PlaybackStore(app, dev.pov.tv.data.Trackers.outboxKey(dev.pov.tv.data.Trackers.SIMKL))
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) { foregroundGate.started(activity) }
             override fun onActivityStopped(activity: Activity) { foregroundGate.stopped(activity) }

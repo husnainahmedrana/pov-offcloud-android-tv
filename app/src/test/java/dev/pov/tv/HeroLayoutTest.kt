@@ -33,8 +33,8 @@ class HeroLayoutTest {
         }
     }
 
-    @Test fun `short feature title leaves the action fully visible in the editorial design`() {
-        val (hero, activity) = render(ThemeSpec.EDITORIAL, "AFTERLIGHT")
+    @Test fun `short feature title leaves the action fully visible`() {
+        val (hero, activity) = render(ThemeSpec.FLIX, "AFTERLIGHT")
         val action = descendants(hero).filterIsInstance<TextView>().single { it.text.toString().contains("Explore") || it.text.toString() == "▶  Play" }
         assertEquals((38 * activity.resources.displayMetrics.widthPixels / 960f).toInt(), action.height)
         assertTrue(action.isFocusable)

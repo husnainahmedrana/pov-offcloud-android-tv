@@ -33,14 +33,21 @@ import java.util.concurrent.Executors
 class MainActivity : Activity() {
     private lateinit var store: SecureStore
     private lateinit var torbox: TorBoxApi
-    private lateinit var wetrakr: WeTrakrApi
-    private lateinit var wetrakrOutbox: PlaybackStore
+    private lateinit var weTrakrApi: WeTrakrApi
+    private lateinit var simklApi: SimklApi
+    private lateinit var weTrakrOutbox: PlaybackStore
+    private lateinit var simklOutbox: PlaybackStore
+    /** The tracker chosen in Settings (WeTrakr or Simkl). Every tracking feature below goes through it. */
+    private val wetrakr: Tracker get() = if (simklChosen) simklApi else weTrakrApi
+    private val wetrakrOutbox: PlaybackStore get() = if (simklChosen) simklOutbox else weTrakrOutbox
+    /** Read once (encrypted settings decrypt on every read) and updated when the service changes. */
+    private var simklChosen = false
     private lateinit var resolver: SourceResolver
     private val catalog = CatalogApi()
     private lateinit var history: PlaybackStore
     private lateinit var body: LinearLayout
     private lateinit var themePreferences: ThemePreferences
-    private var theme = ThemeSpec.EDITORIAL
+    private var theme = ThemeSpec.FLIX
     private lateinit var shellRoot: FrameLayout
     private lateinit var heroBackdrop: FrameLayout
     private lateinit var backdropArt: ImageView
@@ -139,7 +146,9 @@ class MainActivity : Activity() {
         publicPreview = debug && (intent.getBooleanExtra("public_preview", false) || sourcePreview)
         if (DeviceLayout.tv) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         else { window.statusBarColor = 0xFF141414.toInt(); window.navigationBarColor = PHONE_BAR_COLOR }
-        store = SecureStore(this); torbox = TorBoxApi(store); wetrakr = WeTrakrApi(store); wetrakrOutbox = PlaybackStore(this, "wetrakr.pending")
+        store = SecureStore(this); torbox = TorBoxApi(store); weTrakrApi = WeTrakrApi(store); simklApi = SimklApi(store)
+        weTrakrOutbox = PlaybackStore(this, Trackers.outboxKey(Trackers.WETRAKR)); simklOutbox = PlaybackStore(this, Trackers.outboxKey(Trackers.SIMKL))
+        simklChosen = Trackers.selected(store) == Trackers.SIMKL
         resolver = SourceResolver(store, torbox); history = PlaybackStore(this)
         themePreferences = ThemePreferences(this); theme = themePreferences.selected()
         // Retire the old tracker locally; never replay its queued updates after this upgrade.
@@ -347,7 +356,7 @@ class MainActivity : Activity() {
             Destination("home", "Home") { home() }, Destination("movie", "Movies") { catalogPage("movie") },
             Destination("series", "Shows") { catalogPage("series") }, Destination("anime", "Anime") { animePage() },
             Destination("library", "Library") { selectedCloud() }, Destination("search", "Search") { search() },
-            Destination("wetrakr", "WeTrakr") { weTrakrPage() }, Destination("settings", "Settings") { settings() })
+            Destination("wetrakr", wetrakr.name) { weTrakrPage() }, Destination("settings", "Settings") { settings() })
         if (publicPreview || !InAppPlaybackSession.hasActive()) return pages
         val playing = Destination("nowplaying", "Now playing") { returnToVideo() }
         return if (DeviceLayout.tv) listOf(playing) + pages else pages + playing
@@ -461,10 +470,10 @@ class MainActivity : Activity() {
         if (flix && !top) {
             label.visibility = if (railExpanded) View.VISIBLE else View.GONE; label.maxLines = 1; railLabels += label
         }
-        if (target.key == "wetrakr" && !(flix && !top)) {
+        if (target.key == "wetrakr" && wetrakr is WeTrakrApi && !(flix && !top)) {
             if (!top && line.childCount > 0) line.removeViewAt(0)
             line.addView(ImageView(this).apply {
-                setImageResource(if (theme == ThemeSpec.EDITORIAL) R.drawable.wetrakr_logo_dark else R.drawable.wetrakr_logo)
+                setImageResource(R.drawable.wetrakr_logo)
                 scaleType = ImageView.ScaleType.FIT_CENTER; contentDescription = "WeTrakr"
             }, LinearLayout.LayoutParams(if (top) dp(85) else -1, dp(26)))
         } else line.addView(label, LinearLayout.LayoutParams(-2, -2))
@@ -478,7 +487,6 @@ class MainActivity : Activity() {
             label.setTextColor(color); label.typeface = Typeface.create("sans-serif", if (selected) Typeface.BOLD else Typeface.NORMAL)
             for (index in 0 until line.childCount) (line.getChildAt(index) as? NavigationIconView)?.tint = color
             indicator.visibility = if (selected) View.VISIBLE else View.INVISIBLE
-            if (selected && theme == ThemeSpec.EDITORIAL) indicator.background = rounded(theme.palette.secondaryAccent, 2)
             if (flix) {
                 frame.background = rounded(if (focused) theme.palette.navSelected else Color.TRANSPARENT, 4)
                 frame.foreground = null
@@ -702,7 +710,7 @@ class MainActivity : Activity() {
     private fun homeContinueWatching(id: Int) {
         val host = column().apply { tag = "wetrakr-home-continue" }
         body.addView(host, margin(-1, -2, top = 10))
-        host.addView(text("Continue Watching · WeTrakr", if (flix) theme.layout.sectionTitleSizeSp else 20, ink, true), margin(-1, -2, bottom = if (flix) 6 else 8))
+        host.addView(text("Continue Watching · ${wetrakr.name}", if (flix) theme.layout.sectionTitleSizeSp else 20, ink, true), margin(-1, -2, bottom = if (flix) 6 else 8))
         val row = if (flix) horizontalRow(host) else LinearLayout(this).apply { setPadding(dp(3), dp(4), dp(10), dp(4)); clipChildren = false }
         if (!flix) {
             val scroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; isFocusable = false }
@@ -711,7 +719,7 @@ class MainActivity : Activity() {
         fun fill(progress: List<Pair<PlaybackIdentity, Double>>) {
             row.removeAllViews(); host.findViewWithTag<View>("wetrakr-empty")?.let(host::removeView)
             // WeTrakr is authoritative here, including progress made on other devices.
-            if (progress.isEmpty()) host.addView(text("Nothing in progress on WeTrakr.", 13, muted).apply { tag = "wetrakr-empty" })
+            if (progress.isEmpty()) host.addView(text("Nothing in progress on ${wetrakr.name}.", 13, muted).apply { tag = "wetrakr-empty" })
             progress.forEach { (identity, percent) ->
                 remoteProgress[identityKey(identity)] = percent
                 val caption = listOf(if (identity.type == "series") "S${identity.season} E${identity.episode}" else "", "${percent.toInt()}%").filter { it.isNotBlank() }.joinToString(" · ")
@@ -743,9 +751,9 @@ class MainActivity : Activity() {
         body.addView(host, margin(-1, -2, top = 10))
         if (flix) { flixLikedLists(id, host); return }
         read(id, { wetrakr.likedLists() }) { lists ->
-            if (lists.isEmpty() && !home) host.addView(text("No liked lists on WeTrakr yet.", 13, muted))
+            if (lists.isEmpty() && !home) host.addView(text("No liked lists on ${wetrakr.name} yet.", 13, muted))
             if (lists.isNotEmpty()) {
-                host.addView(text("Liked lists · WeTrakr", 20, ink, true), margin(-1, -2, bottom = 8))
+                host.addView(text("Liked lists · ${wetrakr.name}", 20, ink, true), margin(-1, -2, bottom = 8))
                 lists.forEach { (listId, title) ->
                     host.addView(button("$title  ›") {
                         navigate { val pageId = page(title, "Liked list · WeTrakr"); read(pageId, { wetrakr.likedListItems(listId) }) { mediaGrid(it) } }
@@ -819,7 +827,7 @@ class MainActivity : Activity() {
         }
         if (item.description.isNotBlank()) copy.addView(description, margin(if (split) -1 else 345, -2, top = 10))
         val left = 0
-        val copyTop = if (!showAction) 15 else if (theme == ThemeSpec.EDITORIAL) 15 else 8
+        val copyTop = if (!showAction) 15 else 8
         val actionBottom = if (split) 10 else 16
         val availableCopy = dp(if (showAction) height - actionBottom - 38 - copyTop - 8 else height - copyTop - 10)
         repeat(10) {
@@ -1305,7 +1313,7 @@ class MainActivity : Activity() {
                             wetrakr.removeContinueWatching(identity, account)
                             wetrakrOutbox.discard(identity)
                             history.hide(key, identity)
-                        }) { remoteProgress.remove(identityKey(identity)); toast("Removed from WeTrakr Continue Watching"); removeContinueViews(view) }
+                        }) { remoteProgress.remove(identityKey(identity)); toast("Removed from ${wetrakr.name} Continue Watching"); removeContinueViews(view) }
                     } else { history.hide(key, identity); toast("Removed from Continue Watching on this TV"); removeContinueViews(view) }
                 }.setNegativeButton("Cancel", null).show()
             true
@@ -1639,36 +1647,6 @@ class MainActivity : Activity() {
             }.setNegativeButton("Cancel", null).show().submitOnEnter(input)
     }
 
-    private fun appearance() {
-        current = { appearance() }
-        destination = "settings"; refreshNavigation()
-        page("Appearance", "Choose your view.")
-        val width = DeviceLayout.canvasWidth - theme.layout.railWidthDp - theme.layout.contentInsetDp * 2
-        val tileWidth = (width - 20) / 2
-        ThemeSpec.entries.chunked(2).forEach { choices ->
-            val row = LinearLayout(this); body.addView(row, margin(-1, -2, bottom = 16))
-            choices.forEach { choice ->
-                val tile = column().apply {
-                    isFocusable = true; isFocusableInTouchMode = DeviceLayout.tv; isClickable = true; tag = "theme:${choice.id}"; contentDescription = "Apply ${choice.displayName} theme"
-                    background = rounded(panel, 9); setPadding(dp(6), dp(6), dp(6), dp(10))
-                }
-                val art = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; background = rounded(panel, 6); clipToOutline = true }
-                val file = when (choice) { ThemeSpec.FLIX -> "flix.png"; ThemeSpec.EDITORIAL -> "editorial.png" }
-                assets.open("themes/$file").use { stream -> art.setImageBitmap(BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = 4 })) }
-                tile.addView(art, margin(-1, ((tileWidth - 12) * 9 / 16)))
-                tile.addView(text(choice.displayName + if (choice == theme) "  ·  Selected" else "", 16, ink, true).apply { setPadding(dp(8), dp(8), dp(8), 0) })
-                tile.addView(text(choice.description, 11, muted).apply { setPadding(dp(8), dp(5), dp(8), 0); maxLines = 2 }, margin(-1, 35))
-                tile.setOnFocusChangeListener { view, focused -> view.foreground = if (focused) FocusRingDrawable(if (flix) Color.WHITE else accent, dp(9).toFloat(), true, dp(1).toFloat()) else null }
-                tile.setOnClickListener {
-                    themePreferences.select(choice); theme = choice; destination = "home"; backStack.clear()
-                    current = { home() }; shell(); home(); toast("${choice.displayName} theme applied")
-                }
-                row.addView(tile, margin(tileWidth, -2, right = 12))
-            }
-        }
-        body.addView(text("Design previews use sample artwork. Your home screen uses live titles and your viewing progress.", 11, muted), margin(-1, -2, top = 5)); focusAfterRender(generation)
-    }
-
     private fun catalogPage(type: String, query: String = "", skip: Int = 0) {
         current = { catalogPage(type, query, skip) }
         destination = type; refreshNavigation()
@@ -1982,9 +1960,9 @@ class MainActivity : Activity() {
         if (tracker.connected()) {
             actions.addView(button(if (flix) "＋  Watchlist" else "Add to watchlist") { load(generation, { tracker.setWatchlist(identity, true) }) { toast("Added to your ${tracker.name} watchlist") } }.apply { if (flix) gravity = Gravity.CENTER }, margin(155, 44, right = 8))
             actions.addView(button(if (flix) "－  Watchlist" else "Remove from watchlist") { confirm("Remove ${result.title} from your ${tracker.name} watchlist?") { load(generation, { tracker.setWatchlist(identity, false) }) { removeFromListViews("watchlist:${identity.type}", identity); toast("Removed from your ${tracker.name} watchlist") } } }.apply { if (flix) gravity = Gravity.CENTER }, margin(if (flix) 155 else 190, 44, right = 8))
-            actions.addView(button(if (flix) "☰  Remove from playlist" else "Remove from playlist") {
+            if (tracker.supportsLists) actions.addView(button(if (flix) "☰  Remove from playlist" else "Remove from playlist") {
                 read(generation, { tracker.lists() }) { lists ->
-                    if (lists.isEmpty()) toast("No personal playlists on WeTrakr") else AlertDialog.Builder(this).setTitle("Choose your playlist")
+                    if (lists.isEmpty()) toast("No personal playlists on ${tracker.name}") else AlertDialog.Builder(this).setTitle("Choose your playlist")
                         .setItems(lists.map { it.second }.toTypedArray()) { _, index ->
                             confirm("Remove ${result.title} from ${lists[index].second}?") {
                                 load(generation, { tracker.removeListItem(lists[index].first, identity) }) { removeFromListViews("playlist:${lists[index].first}", identity); toast("Removed from ${lists[index].second}") }
@@ -2548,7 +2526,7 @@ class MainActivity : Activity() {
     }
 
     private fun cloudChoice(folder: CloudFolder, file: CloudFile) {
-        val choices = arrayOf("Play file", "Identify movie for WeTrakr", "Identify episode for WeTrakr")
+        val choices = arrayOf("Play file", "Identify movie for ${wetrakr.name}", "Identify episode for ${wetrakr.name}")
         AlertDialog.Builder(this).setTitle(file.name).setItems(choices) { _, choice ->
             if (choice == 0) playCloud(folder, file, null)
             else identifyCloud(folder, file, if (choice == 1) "movie" else "series")
@@ -2643,13 +2621,13 @@ class MainActivity : Activity() {
         destination = "wetrakr"; refreshNavigation()
         val tracker = weTrakrClient()
         val id = page("My ${tracker.name}", "Your watchlist. Your progress. Your next episode.")
-        if (!tracker.connected()) { body.addView(button("Connect WeTrakr") { startWeTrakr() }, margin(210, 44)); return }
+        if (!tracker.connected()) { body.addView(button("Connect ${tracker.name}") { startWeTrakr() }, margin(210, 44)); return }
         if (flix) { flixWeTrakrPage(id); return }
         // Start with the visual library shelves; progress rows must not push them off-screen.
         read(id, { tracker.watchlist("movie") to tracker.watchlist("series") }) { (movies, series) ->
             mediaRow("Movie watchlist", movies); mediaRow("TV watchlist", series)
             likedLists(id, false)
-            body.addView(button("Personal lists") { navigate { weTrakrLists() } }, margin(180, 42, top = 18))
+            if (tracker.supportsLists) body.addView(button("Personal lists") { navigate { weTrakrLists() } }, margin(180, 42, top = 18))
             weTrakrProgress(id)
         }
     }
@@ -2687,7 +2665,7 @@ class MainActivity : Activity() {
         }
         read(id, { wetrakr.watchlist("movie") }) { mediaRow("Movie watchlist", it, movieSlot) }
         read(id, { wetrakr.watchlist("series") }) { mediaRow("TV watchlist", it, showSlot) }
-        read(id, { wetrakr.lists() }) { lists ->
+        if (wetrakr.supportsLists) read(id, { wetrakr.lists() }) { lists ->
             lists.forEach { (listId, title) ->
                 val listSlot = column().also { personalSlot.addView(it, margin(-1, -2)) }
                 read(id, { wetrakr.listItems(listId) }) { items ->
@@ -2790,7 +2768,6 @@ class MainActivity : Activity() {
         page("Settings", "Make POV yours.")
 
         val home = settingsGroup("Home & appearance", "home")
-        if (DeviceLayout.tv) settingsRow(home, "Theme", theme.displayName, "Layout, colours and artwork style.") { navigate { appearance() } }
         val tmdbKey = store.get(TMDB_KEY)
         settingsRow(home, "TMDB", if (tmdbKey.isBlank()) "Not set" else "Connected",
             "Your own free TMDB key adds TMDB catalogs, and makes artwork load faster: TMDB backdrops are a fraction of the size.",
@@ -2915,15 +2892,16 @@ class MainActivity : Activity() {
             }
         }
 
-        val tracking = settingsGroup("WeTrakr", "wetrakr")
+        val tracking = settingsGroup("Tracking", "wetrakr")
+        settingsRow(tracking, "Service", wetrakr.name, "WeTrakr or Simkl: watchlists, Continue Watching, Up Next and progress sync.") { chooseTracker() }
         settingsRow(tracking, "Account", if (wetrakr.connected()) "Connected" else "Not connected",
             if (wetrakr.connected()) "Select to sign in again." else "Sign in with a code to sync watchlists and progress.", status = wetrakr.connected()) { startWeTrakr() }
         settingsToggle(tracking, "Scrobbling", "Automatic playback updates. Your library, Continue Watching and manual actions still work when this is off.",
-            wetrakr.scrobblingEnabled(), contentLabel = "WeTrakr scrobbling") { on -> wetrakr.setScrobblingEnabled(on); wetrakrOutbox.clearPending() }
-        settingsToggle(tracking, "Liked lists on Home", "Shows your liked WeTrakr lists as rows on Home.",
-            store.get("wetrakr.home_liked_opt_in") == "true", contentLabel = "WeTrakr liked lists on Home") { on -> store.put("wetrakr.home_liked_opt_in", on.toString()) }
-        if (wetrakr.connected()) settingsRow(tracking, "Disconnect WeTrakr", danger = true) {
-            confirm("Disconnect WeTrakr on this device?") { wetrakr.disconnect(); wetrakrOutbox.clearPending(); remoteProgress.clear(); refreshSettings() }
+            wetrakr.scrobblingEnabled(), contentLabel = "${wetrakr.name} scrobbling") { on -> wetrakr.setScrobblingEnabled(on); wetrakrOutbox.clearPending() }
+        if (wetrakr.supportsLists) settingsToggle(tracking, "Liked lists on Home", "Shows your liked ${wetrakr.name} lists as rows on Home.",
+            store.get("wetrakr.home_liked_opt_in") == "true", contentLabel = "${wetrakr.name} liked lists on Home") { on -> store.put("wetrakr.home_liked_opt_in", on.toString()) }
+        if (wetrakr.connected()) settingsRow(tracking, "Disconnect ${wetrakr.name}", danger = true) {
+            confirm("Disconnect ${wetrakr.name} on this device?") { wetrakr.disconnect(); wetrakrOutbox.clearPending(); remoteProgress.clear(); refreshSettings() }
         }
 
         val updates = settingsGroup("Updates", "settings")
@@ -3129,10 +3107,25 @@ class MainActivity : Activity() {
     }
 
     private fun weTrakrClient() = wetrakr
-    /** Sign-in with an on-screen code and QR; the app's own WeTrakr Client ID is built in. */
+    /** Sign-in to the chosen tracker with an on-screen code and QR; both apps' public Client IDs are built in. */
     private fun startWeTrakr() {
-        authorize("WeTrakr", { wetrakr.startDeviceAuth() }, { wetrakr.pollDeviceAuth(it) },
-            cancel = { wetrakr.cancelDeviceAuth(it) })
+        val tracker = wetrakr
+        authorize(tracker.name, { tracker.startDeviceAuth() }, { tracker.pollDeviceAuth(it) },
+            cancel = { tracker.cancelDeviceAuth(it) })
+    }
+
+    /** WeTrakr or Simkl. The menu, Home rows and Settings follow the choice; each keeps its own sign-in. */
+    private fun chooseTracker() {
+        val ids = listOf(Trackers.WETRAKR, Trackers.SIMKL)
+        AlertDialog.Builder(this).setTitle("Tracking service")
+            .setSingleChoiceItems(arrayOf("WeTrakr", "Simkl"), ids.indexOf(Trackers.selected(store))) { dialog, index ->
+                dialog.dismiss()
+                if (ids[index] == Trackers.selected(store)) return@setSingleChoiceItems
+                Trackers.select(store, ids[index]); simklChosen = ids[index] == Trackers.SIMKL; remoteProgress.clear(); retainedHome = null
+                // The menu's tracker entry is renamed, so the shell is rebuilt around Settings.
+                destination = "settings"; backStack.clear(); current = { settings() }; shell(); settings()
+                if (!wetrakr.connected()) startWeTrakr()
+            }.setNegativeButton("Cancel", null).show()
     }
 
     private fun startTorBox() { authorize("TorBox", { torbox.startDeviceAuth() }, { torbox.pollDeviceAuth(it) }, cancel = { torbox.cancelDeviceAuth(it) }) }
@@ -3140,7 +3133,7 @@ class MainActivity : Activity() {
                           cancel: (DeviceAuth?) -> Unit = {}, configure: (() -> Unit)? = null) {
         if (authorization?.isShowing == true) return
         authorization = DeviceAuthorizationDialog(this, name, authWorker, start, poll, onConnected = {
-            if (name == "WeTrakr") { wetrakrOutbox.clearPending(); remoteProgress.clear() }
+            if (name == wetrakr.name) { wetrakrOutbox.clearPending(); remoteProgress.clear() }
             toast("$name connected"); current()
         }, onCancel = cancel, configure = configure).also { it.show() }
     }
@@ -3187,7 +3180,7 @@ class MainActivity : Activity() {
 
     private fun showError(error: Exception) {
         val message = uiErrorMessage(error)
-        body.addView(text(message, 14, if (theme == ThemeSpec.EDITORIAL) Color.rgb(150, 37, 28) else Color.rgb(255, 185, 170)), margin(-1, -2, top = 12, bottom = 10))
+        body.addView(text(message, 14, Color.rgb(255, 185, 170)), margin(-1, -2, top = 12, bottom = 10))
         body.addView(button("Try again") { current() }, margin(150, 40, bottom = 12))
     }
     /** Flix option: Continue Watching as wide resume cards (artwork plus an info panel) instead of regular cards. */
@@ -3292,7 +3285,7 @@ class MainActivity : Activity() {
         retainedRoots().forEach { visit(it) }
     }
     private fun personalListGrid(listId: String, title: String) {
-        current = { personalListGrid(listId, title) }; val id = page(title, "Your WeTrakr playlist")
+        current = { personalListGrid(listId, title) }; val id = page(title, "Your ${wetrakr.name} playlist")
         val host = column().apply { setTag(R.id.pov_list_scope, "playlist:$listId") }; body.addView(host)
         read(id, { wetrakr.listItems(listId) }) { mediaGrid(it, host = host) }
     }
@@ -3533,10 +3526,10 @@ class MainActivity : Activity() {
             pressable(4)
             return@apply
         }
-        background = rounded(theme.palette.primaryButton, if (theme == ThemeSpec.EDITORIAL) 23 else 6)
+        background = rounded(theme.palette.primaryButton, 6)
         setOnFocusChangeListener { view, focused ->
             view.foreground = if (focused) FocusRingDrawable(accent,
-                dp(if (theme == ThemeSpec.EDITORIAL) 23 else 6).toFloat(), true, dp(1).toFloat()) else null
+                dp(6).toFloat(), true, dp(1).toFloat()) else null
         }
         setOnClickListener { action() }
     }

@@ -90,7 +90,7 @@ class WeTrakrInstrumentation : Instrumentation() {
             val main = activity
             fun field(name: String) = MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }
             fun method(name: String) = MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }
-            val theme = field("theme"); val preview = field("publicPreview"); val weField = field("wetrakr")
+            val theme = field("theme"); val preview = field("publicPreview"); val weField = field("weTrakrApi")
             val previousTheme = onMain { theme.get(main) }; val previousPreview = onMain { preview.getBoolean(main) }; val previousClient = onMain { weField.get(main) }
             fun captions() = onMain { views(main.window.decorView).filterIsInstance<TextView>().map { it.text.toString() } }
             fun await(test: () -> Boolean) {
@@ -153,7 +153,7 @@ class WeTrakrInstrumentation : Instrumentation() {
                         MainActivity::class.java.getDeclaredMethod("homeLikedLists", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(main, id)
                     }
                     await { captions().contains("Continue Watching · WeTrakr") && captions().contains("Liked lists · WeTrakr") && captions().any { it.contains("Example liked list") } && captions().contains("Example Movie") }
-                    if (spec == ThemeSpec.FLIX || spec == ThemeSpec.EDITORIAL) {
+                    if (spec == ThemeSpec.FLIX) {
                         SystemClock.sleep(300)
                         val bitmap = uiAutomation.takeScreenshot()
                         java.io.File(targetContext.externalCacheDir, "wetrakr-home-${spec.name}.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }

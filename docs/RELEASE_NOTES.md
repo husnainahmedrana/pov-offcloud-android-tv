@@ -1,14 +1,12 @@
-# POV Rajput 0.3.2
+# POV Rajput 0.3.3
 
-## Subtitles
+## Simkl support
 
-- **Subtitles show without picking a track.** Many files have a "Forced" subtitle track (signs and foreign lines only) marked as the default, so most dialogue had no text. When that track is chosen automatically and a full track in the same language exists, the full track is used. A subtitle you pick yourself is never changed.
+- **Choose WeTrakr or Simkl** in **Settings → Tracking → Service**. The menu, Home's Continue Watching, Up Next and watchlists follow your choice, and each service keeps its own sign-in.
+- **Sign in with a code or QR**, no setup: POV Rajput has its own registered Simkl app built in. Scanning the QR code is enough, since it already includes the code.
+- Simkl gets scrobbling (progress while you watch; finishing 90% or more marks it watched), watchlist add/remove, mark watched and offline progress replay.
+- Simkl has no API for personal or liked lists yet, so those stay WeTrakr-only. Removing a title from your Simkl watchlist only works for titles you haven't watched, because Simkl's removal would also erase watch history.
 
-## Continue Watching
+## Flix only
 
-- **Resumed videos show their file size and source badges** (size, WEB-DL, REMUX…). The file name and size are now saved with the link; links saved earlier get the size from the server when playback starts.
-- **Resuming works for add-on direct links too**, including plain HTTP links and links that need request headers. If a saved link has expired, a fresh source search starts as before.
-
-## TV
-
-- **Now playing is at the top of the menu**, above Home, while a video plays, and pressing Left opens the menu on it.
+- The Editorial theme has been retired; everyone now uses the Flix look. The Theme setting is gone, and Editorial users open in Flix automatically.
