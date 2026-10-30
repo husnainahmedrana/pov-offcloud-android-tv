@@ -1323,9 +1323,20 @@ class MainActivity : Activity() {
         val index = parent?.indexOfChild(view) ?: 0
         hideContinue(view.getTag(R.id.pov_continue_identity).toString())
         // Rows run newest first: focus moves to the newer card on the left, or the next one when this was first.
-        parent?.let { group -> (index - 1 downTo 0).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable }?.requestFocus()
-            ?: (index until group.childCount).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable }?.requestFocus() }
+        val target = parent?.let { group -> (index - 1 downTo 0).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable }
+            ?: (index until group.childCount).map(group::getChildAt).firstOrNull { it.visibility == View.VISIBLE && it.isFocusable } }
+        target?.requestFocus()
         if (!focusController.hasVisibleLeafFocus()) focusController.first()
+        // The cards after the removed one shift left but the row keeps its scroll, which would leave the focused
+        // card off-screen. Once the row has laid out again, it scrolls to the focused card, as the remote would.
+        if (target != null && parent != null) parent.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                parent.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                if (isDestroyed || !target.isAttachedToWindow) return
+                if (!placeFlixRow(target)) (parent.parent as? HorizontalScrollView)?.smoothScrollTo((target.left - parent.paddingLeft).coerceAtLeast(0), 0)
+            }
+        })
+        parent?.requestLayout()
     }
     private fun continueOptions(view: View, key: String, identity: PlaybackIdentity?, title: String) {
         view.setTag(R.id.pov_continue_identity, identity?.let(::identityKey) ?: key)
