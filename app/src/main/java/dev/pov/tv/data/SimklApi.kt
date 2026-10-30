@@ -157,6 +157,39 @@ class SimklApi internal constructor(
 
     override fun markWatched(identity: PlaybackIdentity) { validate(identity); history(identity, watchedAt = null); cache.clear() }
 
+    override fun watchedStamp(): String {
+        val activity = parseObject(request("GET", "/sync/activities"))
+        return listOf("movies", "tv_shows").joinToString("|") { section ->
+            val stamps = activity.optJSONObject(section)
+            listOf("completed", "watching", "hold", "dropped", "removed_from_list").joinToString("/") { stamps?.optString(it).orEmpty() }
+        }
+    }
+
+    /** Completed movies, and every show with the episodes watched in it (one library call per type). */
+    override fun watched(): WatchedState {
+        fun items(text: String, kind: String): List<JSONObject> {
+            if (text.isBlank() || text == "null") return emptyList()
+            val list = parseObject(text).optJSONArray(kind) ?: return emptyList()
+            return (0 until list.length()).mapNotNull(list::optJSONObject)
+        }
+        val movies = items(request("GET", "/sync/all-items/movies/completed"), "movies")
+            .mapNotNull { it.optJSONObject("movie")?.let(::imdb) }.toSet()
+        val shows = mutableSetOf<String>(); val episodes = mutableSetOf<String>()
+        items(request("GET", "/sync/all-items/shows?extended=full"), "shows").forEach { item ->
+            val imdb = item.optJSONObject("show")?.let(::imdb) ?: return@forEach
+            if (item.optString("status") == "completed") shows += imdb
+            val seasons = item.optJSONArray("seasons") ?: return@forEach
+            for (s in 0 until seasons.length()) {
+                val season = seasons.optJSONObject(s) ?: continue
+                val list = season.optJSONArray("episodes") ?: continue
+                for (e in 0 until list.length()) list.optJSONObject(e)?.optInt("number", -1)?.takeIf { it > 0 }?.let {
+                    episodes += WatchedState.key(imdb, season.optInt("number", -1), it)
+                }
+            }
+        }
+        return WatchedState(movies, shows, episodes)
+    }
+
     override fun lists(): List<Pair<String, String>> = emptyList()
     override fun listItems(id: String): List<MediaItemData> = emptyList()
     override fun removeListItem(listId: String, identity: PlaybackIdentity) = throw ApiException(0, "Simkl lists aren't supported yet.")

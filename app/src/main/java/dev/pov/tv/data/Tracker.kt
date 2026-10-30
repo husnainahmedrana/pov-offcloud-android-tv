@@ -35,6 +35,11 @@ interface Tracker {
     fun setWatchlist(identity: PlaybackIdentity, add: Boolean)
     fun markWatched(identity: PlaybackIdentity)
 
+    /** A cheap stamp that moves whenever watched history changes, so the full history is only fetched when needed. */
+    fun watchedStamp(): String
+    /** Watched movies, fully watched shows and watched episodes, for the ✓ badges. */
+    fun watched(): WatchedState
+
     fun lists(): List<Pair<String, String>>
     fun listItems(id: String): List<MediaItemData>
     fun removeListItem(listId: String, identity: PlaybackIdentity)

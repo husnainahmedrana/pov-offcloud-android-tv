@@ -42,6 +42,12 @@ class MainActivity : Activity() {
     private val wetrakrOutbox: PlaybackStore get() = if (simklChosen) simklOutbox else weTrakrOutbox
     /** Read once (encrypted settings decrypt on every read) and updated when the service changes. */
     private var simklChosen = false
+    private fun trackerId() = if (simklChosen) Trackers.SIMKL else Trackers.WETRAKR
+    /** The account's watched history behind the ✓ badges on cards and episodes. */
+    private var watched = WatchedState.EMPTY
+    private val watchedCache by lazy { WatchedCache(java.io.File(filesDir, "watched.json")) }
+    @Volatile private var watchedLoading = false
+    private var watchedCheckedAt = 0L
     private lateinit var resolver: SourceResolver
     private val catalog = CatalogApi()
     private lateinit var history: PlaybackStore
@@ -160,12 +166,16 @@ class MainActivity : Activity() {
         InAppPlaybackSession.initialize(this)
         InAppPlaybackSession.addListener(playbackChanged)
         if (savedInstanceState == null && !publicPreview && !sourcePreview) showSplash()
+        if (!publicPreview) refreshWatched()
         shell(); if (sourcePreview) sourceChoiceAudit() else home(); if (!publicPreview) { retrySync(); checkStartupUpdate() }
         window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener(contentFocusChanged)
     }
 
     override fun onResume() {
         super.onResume(); resumed = true; launchingPlayer = false
+        // Back from approving a sign-in code in the browser: check for it straight away.
+        authorization?.takeIf { it.isShowing }?.pollNow()
+        if (!publicPreview && ::store.isInitialized && android.os.SystemClock.elapsedRealtime() - watchedCheckedAt > 60_000) refreshWatched()
         if (::shellRoot.isInitialized) updateMiniPlayer()
         if (BackHoldGesture.settingsRequested && ::shellRoot.isInitialized) { BackHoldGesture.settingsRequested = false; openSettingsAnywhere() }
     }
@@ -1258,6 +1268,9 @@ class MainActivity : Activity() {
         poster.addView(art, FrameLayout.LayoutParams(-1, -1))
         image(art, thumbnail(item.poster.ifBlank { if (item.imdbId.matches(Regex("tt\\d+"))) "https://images.metahub.space/poster/medium/${item.imdbId}/img" else "" }))
         frame.addView(poster, FrameLayout.LayoutParams(posterWidth, -1, Gravity.END))
+        watchedBadge(if (item.type == "movie") "movie" else "series", item.imdbId)?.let {
+            poster.addView(it, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.TOP or Gravity.END).apply { topMargin = dp(5); rightMargin = dp(5) })
+        }
         frame.setOnFocusChangeListener { view, focused ->
             poster.foreground = if (focused) FocusRingDrawable(Color.WHITE, dp(4).toFloat(), true, dp(1).toFloat()) else null
             view.animate().scaleX(if (focused) 1.07f else 1f).scaleY(if (focused) 1.07f else 1f).setDuration(140).start()
@@ -1822,6 +1835,8 @@ class MainActivity : Activity() {
             val query = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.trim().orEmpty().take(200)
             if (resultCode == RESULT_OK && query.isNotBlank()) navigate { searchResults(query) } else search()
         } else if (requestCode == PLAYBACK_REQUEST) {
+            // A finished title reaches the service's history a few seconds after the player closes.
+            if (!publicPreview) window.decorView.postDelayed({ if (!isDestroyed) refreshWatched() }, 8_000)
             val identity = cachedPlayback ?: runCatching { data?.getStringExtra("cached_identity")?.let { PlaybackIdentity.fromJson(org.json.JSONObject(it)) } }.getOrNull()
             cachedPlayback = null; launchingPlayer = false
             if (resultCode == RESULT_FIRST_USER && identity != null) {
@@ -1970,7 +1985,7 @@ class MainActivity : Activity() {
                         }.setNegativeButton("Cancel", null).show()
                 }
             }, margin(190, 44, right = 8))
-            if (result.type == "movie" || episode != null) actions.addView(button(if (flix) "✓  Watched" else "Mark watched") { confirm("Mark ${result.title}${episode?.let { " S${it.season} E${it.episode}" }.orEmpty()} as watched?") { load(generation, { tracker.markWatched(episode ?: identity) }) { hideContinue(identityKey(episode ?: identity)); toast("${tracker.name} history updated") } } }, margin(150, 44))
+            if (result.type == "movie" || episode != null) actions.addView(button(if (flix) "✓  Watched" else "Mark watched") { confirm("Mark ${result.title}${episode?.let { " S${it.season} E${it.episode}" }.orEmpty()} as watched?") { load(generation, { tracker.markWatched(episode ?: identity) }) { hideContinue(identityKey(episode ?: identity)); markedWatched(episode ?: identity); toast("${tracker.name} history updated") } } }, margin(150, 44))
         }
     }
 
@@ -2060,6 +2075,9 @@ class MainActivity : Activity() {
         // Stills use the priority pool so they never queue behind the Home page's thumbnails.
         image(art, episode.thumbnail.ifBlank { backdropFor(show) }, feature = true)
         if (future) still.addView(View(this).apply { setBackgroundColor(0x99000000.toInt()) }, FrameLayout.LayoutParams(-1, -1))
+        watchedBadge("episode", identity.imdbId, identity.season, identity.episode)?.let {
+            still.addView(it, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.TOP or Gravity.END).apply { topMargin = dp(5); rightMargin = dp(5) })
+        }
         if (DeviceLayout.phone) row.addView(still, LinearLayout.LayoutParams(dp(120), dp(68)))
         else row.addView(still, LinearLayout.LayoutParams(dp(168), dp(95)))
         val copy = column().apply { setPadding(dp(if (DeviceLayout.phone) 10 else 14), dp(2), 0, 0) }
@@ -2077,7 +2095,7 @@ class MainActivity : Activity() {
         row.setOnClickListener { if (future) toast("This episode has not been released yet") else navigate { showSources(identity) } }
         row.pressable(6)
         if (tracker.connected() && !future) row.setOnLongClickListener {
-            confirm("Mark S${identity.season} E${identity.episode} as watched?") { load(generation, { tracker.markWatched(identity) }) { toast("Episode marked watched") } }; true
+            confirm("Mark S${identity.season} E${identity.episode} as watched?") { load(generation, { tracker.markWatched(identity) }) { markedWatched(identity); toast("Episode marked watched") } }; true
         }
         return row
     }
@@ -2092,7 +2110,7 @@ class MainActivity : Activity() {
             tag = "episode:${identity.imdbId}:${identity.season}:${identity.episode}"
             contentDescription = "$number. $title. ${if (future) "Not yet released" else detail}"
             if (tracker.connected() && !future) setOnLongClickListener {
-                confirm("Mark $number as watched?") { load(generation, { tracker.markWatched(identity) }) { toast("Episode marked watched") } }; true
+                confirm("Mark $number as watched?") { load(generation, { tracker.markWatched(identity) }) { markedWatched(identity); toast("Episode marked watched") } }; true
             }
         }
     }
@@ -2901,7 +2919,7 @@ class MainActivity : Activity() {
         if (wetrakr.supportsLists) settingsToggle(tracking, "Liked lists on Home", "Shows your liked ${wetrakr.name} lists as rows on Home.",
             store.get("wetrakr.home_liked_opt_in") == "true", contentLabel = "${wetrakr.name} liked lists on Home") { on -> store.put("wetrakr.home_liked_opt_in", on.toString()) }
         if (wetrakr.connected()) settingsRow(tracking, "Disconnect ${wetrakr.name}", danger = true) {
-            confirm("Disconnect ${wetrakr.name} on this device?") { wetrakr.disconnect(); wetrakrOutbox.clearPending(); remoteProgress.clear(); refreshSettings() }
+            confirm("Disconnect ${wetrakr.name} on this device?") { wetrakr.disconnect(); wetrakrOutbox.clearPending(); remoteProgress.clear(); refreshWatched(); refreshSettings() }
         }
 
         val updates = settingsGroup("Updates", "settings")
@@ -3122,8 +3140,12 @@ class MainActivity : Activity() {
                 dialog.dismiss()
                 if (ids[index] == Trackers.selected(store)) return@setSingleChoiceItems
                 Trackers.select(store, ids[index]); simklChosen = ids[index] == Trackers.SIMKL; remoteProgress.clear(); retainedHome = null
-                // The menu's tracker entry is renamed, so the shell is rebuilt around Settings.
+                watched = WatchedState.EMPTY; refreshWatched()
+                // The menu's tracker entry is renamed, so the shell is rebuilt around Settings,
+                // returning to the same row and scroll position.
+                val index = focusController.focusedIndex(); val scroll = scroller.scrollY
                 destination = "settings"; backStack.clear(); current = { settings() }; shell(); settings()
+                body.post { if (!isDestroyed && destination == "settings") focusController.restoreIndex(index, scroll) }
                 if (!wetrakr.connected()) startWeTrakr()
             }.setNegativeButton("Cancel", null).show()
     }
@@ -3133,7 +3155,7 @@ class MainActivity : Activity() {
                           cancel: (DeviceAuth?) -> Unit = {}, configure: (() -> Unit)? = null) {
         if (authorization?.isShowing == true) return
         authorization = DeviceAuthorizationDialog(this, name, authWorker, start, poll, onConnected = {
-            if (name == wetrakr.name) { wetrakrOutbox.clearPending(); remoteProgress.clear() }
+            if (name == wetrakr.name) { wetrakrOutbox.clearPending(); remoteProgress.clear(); refreshWatched(force = true) }
             toast("$name connected"); current()
         }, onCancel = cancel, configure = configure).also { it.show() }
     }
@@ -3237,6 +3259,66 @@ class MainActivity : Activity() {
         }
         frame.setOnClickListener { action() }
         return frame.pressable(6)
+    }
+
+    /**
+     * Badges come from the saved history at once; the service is asked for its cheap change stamp, and the full
+     * history is downloaded only when that moved (both services ask apps not to refetch whole libraries).
+     */
+    private fun refreshWatched(force: Boolean = false) {
+        watchedCheckedAt = android.os.SystemClock.elapsedRealtime()
+        val tracker = wetrakr; val service = trackerId()
+        if (!tracker.connected()) { if (watched != WatchedState.EMPTY) { watched = WatchedState.EMPTY; refreshBadges() }; return }
+        val revision = tracker.accountRevision()
+        val saved = watchedCache.load(service, revision)
+        if (saved != null && saved.state != watched) { watched = saved.state; refreshBadges() }
+        if (watchedLoading) return
+        watchedLoading = true
+        worker.execute {
+            try {
+                val stamp = tracker.watchedStamp()
+                if (!force && saved != null && saved.stamp == stamp) return@execute
+                val state = tracker.watched()
+                watchedCache.save(WatchedCache.Entry(service, revision, stamp, state))
+                runOnUiThread { if (!isDestroyed && trackerId() == service && wetrakr.accountRevision() == revision) { watched = state; refreshBadges() } }
+            } catch (_: Exception) { /* Badges are a convenience; the next check retries. */ } finally { watchedLoading = false }
+        }
+    }
+
+    /** A manual mark shows its badge straight away; the next service check confirms it. */
+    private fun markedWatched(identity: PlaybackIdentity) { watched = watched.with(identity); refreshBadges() }
+
+    private fun watchedKey(key: String): Boolean {
+        val parts = key.split(':')
+        return when (parts.firstOrNull()) {
+            "movie" -> watched.movie(parts.getOrElse(1) { "" })
+            "series" -> watched.show(parts.getOrElse(1) { "" })
+            "episode" -> parts.size == 4 && watched.episode(parts[1], parts[2].toIntOrNull() ?: -1, parts[3].toIntOrNull() ?: -1)
+            else -> false
+        }
+    }
+
+    /** A small ✓ on artwork, shown when the linked tracker says it was watched. Untrackable titles get none. */
+    private fun watchedBadge(kind: String, imdb: String, season: Int = 0, episode: Int = 0): View? {
+        if (!imdb.matches(Regex("tt\\d+")) || publicPreview) return null
+        val key = if (kind == "episode") "episode:$imdb:$season:$episode" else "$kind:$imdb"
+        return text("✓", 12, Color.BLACK, true).apply {
+            gravity = Gravity.CENTER; tag = "watched-badge:$key"; contentDescription = "Watched"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE); setStroke(dp(1), 0x33000000) }
+            elevation = dp(2).toFloat(); visibility = if (watchedKey(key)) View.VISIBLE else View.GONE
+        }
+    }
+
+    /** Updates every badge on screen and in the back stack after the history changes. */
+    private fun refreshBadges() {
+        if (!::body.isInitialized) return
+        fun visit(view: View) {
+            (view.tag as? String)?.takeIf { it.startsWith("watched-badge:") }?.let { tag ->
+                view.visibility = if (watchedKey(tag.removePrefix("watched-badge:"))) View.VISIBLE else View.GONE
+            }
+            if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
+        }
+        retainedRoots().forEach(::visit)
     }
 
     private fun cardWidth(): Int {
@@ -3347,6 +3429,9 @@ class MainActivity : Activity() {
         if (secondary.isNotBlank() && (caption.isNotBlank() || shape == CardFormat.LANDSCAPE)) labels.addView(text(secondary, 10, 0xFFCFD8E4.toInt()), margin(-1, -2, top = 2))
         artFrame.addView(labels, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         frame.addView(artFrame, FrameLayout.LayoutParams(-1, -1))
+        watchedBadge(if (item.type == "movie") "movie" else "series", item.imdbId)?.let {
+            frame.addView(it, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(6); rightMargin = dp(6) })
+        }
         if (progress != null) {
             val track = FrameLayout(this).apply { background = rounded(0xFF34424D.toInt(), 3) }
             track.addView(View(this).apply { background = rounded(theme.palette.progress, 3) }, FrameLayout.LayoutParams(0, -1))

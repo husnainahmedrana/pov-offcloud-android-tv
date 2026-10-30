@@ -167,6 +167,9 @@ internal class DeviceAuthorizationDialog(
                 if (error is ApiException && error.code == 429) {
                     status.text = "$service asked us to wait. Your code is still valid."
                     schedulePoll(request, maxOf((value.intervalSeconds + 5) * 1000L, error.retryAfterSeconds * 1000L))
+                } else if (transient(error)) {
+                    // A phone may block network while the browser is open; keep checking until the code expires.
+                    schedulePoll(request, value.intervalSeconds * 1000L)
                 } else fail(error)
             }) { connected ->
                 if (connected) {
@@ -180,6 +183,16 @@ internal class DeviceAuthorizationDialog(
                 } else schedulePoll(request, value.intervalSeconds * 1000L)
             }
         }.also { handler.postDelayed(it, delay) }
+    }
+
+    /** No connection, a timeout or a server hiccup: the code is still valid, so checking continues. */
+    private fun transient(error: Exception) = error !is ApiException || error.code == 0 || error.code >= 500
+
+    /** Checks at once, e.g. when the viewer returns from approving the code in a browser on the same phone. */
+    fun pollNow() {
+        if (!active || auth == null) return
+        pollTask?.let(handler::removeCallbacks)
+        schedulePoll(attempt, 0)
     }
 
     private fun fail(error: Exception) {

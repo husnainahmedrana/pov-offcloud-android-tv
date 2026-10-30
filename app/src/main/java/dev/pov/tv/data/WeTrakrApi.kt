@@ -279,6 +279,31 @@ class WeTrakrApi internal constructor(
         fun image(key: String) = item.optString(key).takeIf { it.startsWith('/') }?.let { "https://image.tmdb.org/t/p/w500$it" }.orEmpty()
         return MediaItemData(id, type, title, item.optString(if (type == "movie") "release_date" else "first_air_date").take(4), image("poster_path"), image("backdrop_path"))
     }
+    override fun watchedStamp(): String {
+        val activity = parseObject(request("/sync/last_activities"))
+        return listOf("movies", "shows", "episodes").joinToString("|") { section ->
+            val stamps = activity.optJSONObject(section)
+            "${stamps?.optString("last_tracking_watched_at")}/${stamps?.optString("last_tracking_removed_at")}"
+        }
+    }
+
+    /** Compact rows (ids and numbers only), one page of up to 5,000 each, as WeTrakr asks for library syncs. */
+    override fun watched(): WatchedState {
+        fun rows(path: String): List<JSONObject> {
+            val array = try { JSONArray(request("$path${if ('?' in path) "&" else "?"}compact=true&limit=5000")) } catch (error: ApiException) { throw error } catch (_: Exception) { malformed() }
+            return (0 until array.length()).mapNotNull(array::optJSONObject)
+        }
+        fun imdb(ids: JSONObject?) = ids?.optString("imdb")?.takeIf { it.matches(Regex("tt[0-9]{5,12}")) }
+        val movies = rows("/sync/tracking/watched/movies").mapNotNull { imdb(it.optJSONObject("ids")) }.toSet()
+        val shows = rows("/sync/tracking/watched/shows").mapNotNull { imdb(it.optJSONObject("ids")) }.toSet()
+        val episodes = rows("/sync/tracking/watched/history/episodes").mapNotNull { row ->
+            val show = imdb(row.optJSONObject("show_ids")) ?: imdb(row.optJSONObject("show")?.optJSONObject("ids")) ?: return@mapNotNull null
+            val season = row.optInt("season_number", -1); val number = row.optInt("number", -1)
+            if (season < 0 || number <= 0) null else WatchedState.key(show, season, number)
+        }.toSet()
+        return WatchedState(movies, shows, episodes)
+    }
+
     override fun setWatchlist(identity: PlaybackIdentity, add: Boolean) { tracking(identity, "planning", remove = !add) }
     override fun markWatched(identity: PlaybackIdentity) { tracking(identity, "watched") }
     private fun tracking(identity: PlaybackIdentity, status: String, remove: Boolean = false, percent: Double? = null, timestamp: String? = null, replay: Boolean = false) = synchronized(refreshLock) {

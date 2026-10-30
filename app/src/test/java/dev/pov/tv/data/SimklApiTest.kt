@@ -99,6 +99,22 @@ class SimklApiTest {
         assertEquals("tt1375666", identity.imdbId); assertEquals(42.5, progress, 0.0)
     }
 
+    @Test fun `watched history marks completed movies, finished shows and each watched episode`() {
+        val h = Harness(); h.link()
+        h.respond = { request -> when {
+            request.url.contains("/sync/all-items/movies/completed") -> JSONObject().put("movies", JSONArray().put(JSONObject()
+                .put("movie", JSONObject().put("ids", JSONObject().put("imdb", "tt1375666"))))).toString()
+            request.url.contains("/sync/all-items/shows") -> JSONObject().put("shows", JSONArray()
+                .put(JSONObject().put("status", "completed").put("show", JSONObject().put("ids", JSONObject().put("imdb", "tt0903747"))))
+                .put(JSONObject().put("status", "watching").put("show", JSONObject().put("ids", JSONObject().put("imdb", "tt0412142")))
+                    .put("seasons", JSONArray().put(JSONObject().put("number", 5).put("episodes", JSONArray().put(JSONObject().put("number", 17))))))).toString()
+            else -> error("Unexpected ${request.url}")
+        } }
+        val state = h.api.watched()
+        assertTrue(state.movie("tt1375666")); assertTrue(state.show("tt0903747")); assertFalse(state.show("tt0412142"))
+        assertTrue(state.episode("tt0412142", 5, 17)); assertFalse(state.episode("tt0412142", 5, 18))
+    }
+
     @Test fun `an expiring token is refreshed before the request`() {
         val h = Harness(); h.link()
         h.time += 604_800_000L - 1_000L
