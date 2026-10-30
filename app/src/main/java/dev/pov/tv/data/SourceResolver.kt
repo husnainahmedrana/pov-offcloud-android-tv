@@ -72,9 +72,10 @@ class SourceResolver internal constructor(
         val streams = payload.optJSONArray("streams") ?: return emptyList()
         return (0 until minOf(streams.length(), 300)).mapNotNull { index ->
             val stream = streams.optJSONObject(index) ?: return@mapNotNull null
-            if (stream.optJSONObject("behaviorHints")?.optJSONObject("proxyHeaders") != null) return@mapNotNull null
             val hash = stream.optString("infoHash").lowercase(Locale.ROOT).takeIf(HASH::matches).orEmpty()
             val direct = stream.optString("url").takeIf(::isHttps).orEmpty()
+            // Stremio sends these through its local proxy; the player sends them itself.
+            val headers = if (direct.isBlank()) emptyMap() else requestHeaders(stream)
             if (hash.isBlank() && direct.isBlank()) return@mapNotNull null
             val description = stream.optString("description").ifBlank { stream.optString("title") }
             val filename = stream.optJSONObject("behaviorHints")?.optString("filename").orEmpty()
@@ -83,7 +84,7 @@ class SourceResolver internal constructor(
             if (identity.type == "series" && EpisodeFilename.isExplicitMismatch(title, identity.season, identity.episode)) return@mapNotNull null
             val fileIndex = if (stream.has("fileIdx") && !stream.isNull("fileIdx")) stream.optInt("fileIdx", -1).takeIf { it >= 0 } else null
             SourceItem(title = title, provider = provider, infoHash = hash, fileIndex = fileIndex, directUrl = direct,
-                sizeBytes = SourceMetadata.sizeBytes(stream), qualityHeight = SourceMetadata.qualityHeight(stream),
+                sizeBytes = SourceMetadata.sizeBytes(stream), qualityHeight = SourceMetadata.qualityHeight(stream), headers = headers,
                 detail = listOf(stream.optString("name"), description.lineSequence().drop(1).joinToString(" · "))
                     .filter { it.isNotBlank() }.joinToString(" · ").take(800))
         }
@@ -156,7 +157,7 @@ class SourceResolver internal constructor(
         }
         if (source.directUrl.isNotBlank()) {
             require(isHttps(source.directUrl)) { "Only HTTPS video sources are supported." }
-            return PreparedSource.Direct(source.directUrl, identity)
+            return PreparedSource.Direct(source.directUrl, identity, source.headers)
         }
         val hash = source.infoHash.lowercase(Locale.ROOT)
         require(HASH.matches(hash)) { "The selected source has no valid torrent hash." }
@@ -275,6 +276,17 @@ class SourceResolver internal constructor(
         require(identity.type != "series" || (identity.season >= 0 && identity.episode > 0)) {
             "Choose an episode before searching for sources."
         }
+    }
+
+    private fun requestHeaders(stream: JSONObject): Map<String, String> {
+        val request = stream.optJSONObject("behaviorHints")?.optJSONObject("proxyHeaders")?.optJSONObject("request")
+            ?: return emptyMap()
+        return request.keys().asSequence().mapNotNull { name ->
+            val value = request.optString(name)
+            // Header names and values must not smuggle extra lines into the request.
+            if (name.isBlank() || name.any { it <= ' ' || it == ':' } || value.any { it == '\r' || it == '\n' }) null
+            else name to value
+        }.take(20).toMap()
     }
 
     private fun isHttps(value: String): Boolean = try {

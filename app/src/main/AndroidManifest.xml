@@ -17,7 +17,7 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@drawable/pov_icon"
         android:label="POV Rajput" android:banner="@drawable/pov_banner"
-        android:theme="@style/AppTheme" android:usesCleartextTraffic="false"
+        android:theme="@style/AppTheme" android:usesCleartextTraffic="true"
         android:supportsRtl="true">
         <provider android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">

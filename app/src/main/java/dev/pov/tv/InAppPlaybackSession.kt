@@ -23,12 +23,15 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioOffloadSupport
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import dev.pov.tv.data.PlaybackIdentity
@@ -55,6 +58,7 @@ object InAppPlaybackSession {
     private lateinit var wetrakrOutbox: PlaybackStore
     private var sourceUrl = ""
     private var sourceKey = ""
+    private var sourceHeaders = emptyMap<String, String>()
     private var playbackAccount: String? = null
     private var lastLinkSaved = false
     var debridService: String? = null
@@ -159,6 +163,8 @@ object InAppPlaybackSession {
         stopInternal(notify = false)
         sourceUrl = address
         sourceKey = intent.getStringExtra("key").orEmpty()
+        sourceHeaders = runCatching { JSONObject(intent.getStringExtra("headers") ?: "{}").let { json ->
+            json.keys().asSequence().associateWith { json.getString(it) } } }.getOrDefault(emptyMap())
         playbackAccount = saved?.getString("playback_account") ?: intent.getStringExtra("playback_account")
         lastLinkSaved = false
         debridService = PlaybackDebrid.normalize(saved?.getString("debrid_service") ?: intent.getStringExtra("debrid_service"))
@@ -222,7 +228,12 @@ object InAppPlaybackSession {
                 }
             }
         }
+        // Direct links often redirect http <-> https (e.g. 307 to a CDN); ExoPlayer refuses
+        // cross-protocol redirects by default, while Stremio and VLC follow them.
+        val http = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)
+            .setDefaultRequestProperties(sourceHeaders)
         val exo = ExoPlayer.Builder(application!!, renderers)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(application!!, http)))
             .setLoadControl(ReadAheadPreferences(application!!).loadControl())
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setHandleAudioBecomingNoisy(true)
@@ -278,7 +289,8 @@ object InAppPlaybackSession {
                 if (state == Player.STATE_READY && !lastLinkSaved) {
                     lastLinkSaved = true
                     val media = identity; val account = playbackAccount
-                    if (media != null && account != null) runCatching {
+                    // Header-bound links carry short-lived cookies; a fresh source search is safer than replaying them.
+                    if (media != null && account != null && sourceHeaders.isEmpty()) runCatching {
                         dev.pov.tv.data.LastPlayedLinks(SecureStore(application!!)).save(media, sourceUrl, sourceKey, debridService, account)
                     }
                 }
@@ -379,7 +391,7 @@ object InAppPlaybackSession {
         targetView = null
         mediaSession?.release(); mediaSession = null
         exo?.release(); player = null
-        sourceUrl = ""; sourceKey = ""; title = ""; mediaName = ""; mediaSize = null; identity = null; debridService = null; playbackAccount = null; lastLinkSaved = false
+        sourceUrl = ""; sourceKey = ""; sourceHeaders = emptyMap(); title = ""; mediaName = ""; mediaSize = null; identity = null; debridService = null; playbackAccount = null; lastLinkSaved = false
         remotePercent = 0.0; error = null
         if (notify) notifyChanged()
     }
@@ -398,6 +410,7 @@ object InAppPlaybackSession {
         val exo = player ?: return null
         return Intent(context, PlayerActivity::class.java).putExtra("reuse_session", true)
             .putExtra("url", sourceUrl).putExtra("title", title).putExtra("key", sourceKey)
+            .putExtra("headers", JSONObject(sourceHeaders).toString())
             .putExtra("media_name", mediaName).putExtra("media_size", mediaSize ?: 0L)
             .putExtra("debrid_service", debridService).putExtra("playback_account", playbackAccount)
             .putExtra("resume", exo.currentPosition).putExtra("resume_percent", remotePercent)

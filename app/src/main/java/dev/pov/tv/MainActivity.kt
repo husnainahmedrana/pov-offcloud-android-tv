@@ -2149,7 +2149,8 @@ class MainActivity : Activity() {
                         resolvingGeneration = null; body.removeView(progress)
                         when (prepared) {
                             is PreparedSource.Direct -> play(prepared.url, prepared.identity.title, prepared.identity,
-                                "media:${prepared.identity.imdbId}:${prepared.identity.season}:${prepared.identity.episode}")
+                                "media:${prepared.identity.imdbId}:${prepared.identity.season}:${prepared.identity.episode}",
+                                headers = prepared.headers)
                             is PreparedSource.OffcloudFiles -> {
                                 if (prepared.files.size == 1) playOffcloudFile(prepared, prepared.files.single())
                                 else navigate { offcloudFiles(prepared) }
@@ -2482,7 +2483,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun play(url: String, title: String, identity: PlaybackIdentity?, key: String, debridService: String? = null, resumeImmediately: Boolean = false) {
+    private fun play(url: String, title: String, identity: PlaybackIdentity?, key: String, debridService: String? = null, resumeImmediately: Boolean = false,
+                     headers: Map<String, String> = emptyMap()) {
         if (launchingPlayer) return
         if (Uri.parse(url).scheme != "https") { toast("This stream did not return a secure playback link."); return }
         launchingPlayer = true
@@ -2493,6 +2495,7 @@ class MainActivity : Activity() {
                 .putExtra("debrid_service", PlaybackDebrid.normalize(debridService)).putExtra("cached_playback", resumeImmediately)
                 .putExtra("playback_account", LastPlayedLinks(store).scope(PlaybackDebrid.normalize(debridService)))
                 .putExtra("media_name", playingMedia?.first.orEmpty()).putExtra("media_size", playingMedia?.second ?: 0L)
+                .putExtra("headers", org.json.JSONObject(headers).toString())
             playingMedia = null; playingSourceText = ""
             @Suppress("DEPRECATION")
             startActivityForResult(intent, PLAYBACK_REQUEST)

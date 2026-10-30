@@ -62,14 +62,17 @@ data class SourceItem(
     val cachedServices: List<String> = emptyList(),
     val downloadService: String? = null,
     val sizeBytes: Long? = null,
-    val qualityHeight: Int? = null
+    val qualityHeight: Int? = null,
+    /** Request headers the addon requires (Stremio `behaviorHints.proxyHeaders.request`). */
+    val headers: Map<String, String> = emptyMap()
 )
 
 /** A selected source either streams directly or offers stable TorBox file identities. */
 sealed interface PreparedSource {
     val identity: PlaybackIdentity
 
-    data class Direct(val url: String, override val identity: PlaybackIdentity) : PreparedSource
+    data class Direct(val url: String, override val identity: PlaybackIdentity,
+                      val headers: Map<String, String> = emptyMap()) : PreparedSource
 
     data class OffcloudFiles(
         val requestId: String?,
