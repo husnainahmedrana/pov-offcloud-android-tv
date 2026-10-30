@@ -159,7 +159,7 @@ object InAppPlaybackSession {
         initialize(context)
         val address = intent.getStringExtra("url").orEmpty()
         val uri = try { Uri.parse(address) } catch (_: RuntimeException) { null }
-        if (uri == null || uri.scheme != "https" || uri.host.isNullOrBlank() || uri.userInfo != null) return false
+        if (uri == null || uri.scheme !in setOf("https", "http") || uri.host.isNullOrBlank() || uri.userInfo != null) return false
         stopInternal(notify = false)
         sourceUrl = address
         sourceKey = intent.getStringExtra("key").orEmpty()

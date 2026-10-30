@@ -1999,10 +1999,8 @@ class MainActivity : Activity() {
         val suffix = if (identity.type == "series") "  ·  S${identity.season} E${identity.episode}" else ""
         val connected = DebridServices.connected(store)
         val order = connected.joinToString(" → ") { DebridServices.name(it) }
-        val id = page(identity.title + suffix, if (connected.isEmpty()) "Connect a debrid service to find playable sources." else "Cached source priority: $order.")
-        if (connected.isEmpty()) {
-            body.addView(button("Connect a debrid service in Settings") { navigate { settings() } }, margin(310, 44)); return
-        }
+        // Without a debrid service, addons can still supply direct links; torrents are left out.
+        val id = page(identity.title + suffix, if (connected.isEmpty()) "Direct links only. Torrent sources need a debrid service." else "Cached source priority: $order.")
         read(id, { resolver.search(identity) }) { result ->
             sourceResults(identity, result.items, result.unavailableProviders, autoplay = store.get(AUTOPLAY_FIRST) == "true")
         }
@@ -2017,22 +2015,28 @@ class MainActivity : Activity() {
             else sourceResults(identity, sources, unavailable)
         }
         val connected = DebridServices.connected(store)
-        if (connected.isEmpty()) { showSources(identity); return }
+        val directOnly = connected.isEmpty()
+        val playable = if (directOnly) sources.filter { it.directUrl.isNotEmpty() } else sources
         val checkOnPlay = connected.filter { it in LinkDebrids.CHECK_ON_PLAY }
         val suffix = if (identity.type == "series") "  ·  S${identity.season} E${identity.episode}" else ""
-        val id = page(identity.title + suffix, "Cached source priority: ${connected.joinToString(" → ") { DebridServices.name(it) }}.")
+        val id = page(identity.title + suffix, if (directOnly) "Direct links only. Torrent sources need a debrid service."
+            else "Cached source priority: ${connected.joinToString(" → ") { DebridServices.name(it) }}.")
         val sorting = SourceSortPreferences(this)
         body.addView(button("Sort · ${sorting.label}  ›") {
             SourceSortPreferences.show(this) { sourceResults(identity, sources, unavailable) }
         }, margin(-1, 42, bottom = 8))
         if (unavailable.isNotEmpty()) body.addView(text("Unavailable providers: ${unavailable.joinToString(", ")}. Other providers were searched.", 14, muted), margin(-1, -2, bottom = 8))
         if (sources.isEmpty()) body.addView(text("No sources were returned. Try again later or check the source provider in Settings.", 15, muted))
+        else if (playable.isEmpty()) {
+            body.addView(text("Only torrent sources were found. Connect a debrid service to play them.", 15, muted))
+            body.addView(button("Connect a debrid service in Settings") { navigate { settings() } }, margin(-1, 44, top = 8))
+        }
         val choices = TvChoiceList(this); body.addView(choices, margin(-1, -2))
         // Sources taller than this TV can decode (such as 8K on a 4K TV) go last and are never auto-played.
         val limit = DecoderLimits.maxHeight()
         fun tooTall(source: SourceItem) = (source.qualityHeight ?: 0) > limit
         val languages = sorting.languages
-        val ordered = sources.distinctBy(TvChoiceKeys::source).let { unique -> languages?.sorted(unique, sorting.order) ?: sorting.order.sorted(unique) }.let { all -> all.filterNot(::tooTall) + all.filter(::tooTall) }
+        val ordered = playable.distinctBy(TvChoiceKeys::source).let { unique -> languages?.sorted(unique, sorting.order) ?: sorting.order.sorted(unique) }.let { all -> all.filterNot(::tooTall) + all.filter(::tooTall) }
         ordered.forEach { source ->
             val cachedOn = source.cachedServices.map(DebridServices::name)
             val status = when {
@@ -2486,7 +2490,7 @@ class MainActivity : Activity() {
     private fun play(url: String, title: String, identity: PlaybackIdentity?, key: String, debridService: String? = null, resumeImmediately: Boolean = false,
                      headers: Map<String, String> = emptyMap()) {
         if (launchingPlayer) return
-        if (Uri.parse(url).scheme != "https") { toast("This stream did not return a secure playback link."); return }
+        if (Uri.parse(url).scheme !in setOf("https", "http")) { toast("This stream did not return a playable web link."); return }
         launchingPlayer = true
         val remotePercent = identity?.let { remoteProgress[identityKey(it)] } ?: 0.0
         val start = {

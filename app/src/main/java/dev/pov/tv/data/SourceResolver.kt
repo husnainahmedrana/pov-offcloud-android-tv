@@ -73,7 +73,7 @@ class SourceResolver internal constructor(
         return (0 until minOf(streams.length(), 300)).mapNotNull { index ->
             val stream = streams.optJSONObject(index) ?: return@mapNotNull null
             val hash = stream.optString("infoHash").lowercase(Locale.ROOT).takeIf(HASH::matches).orEmpty()
-            val direct = stream.optString("url").takeIf(::isHttps).orEmpty()
+            val direct = stream.optString("url").takeIf(::isWebLink).orEmpty()
             // Stremio sends these through its local proxy; the player sends them itself.
             val headers = if (direct.isBlank()) emptyMap() else requestHeaders(stream)
             if (hash.isBlank() && direct.isBlank()) return@mapNotNull null
@@ -156,7 +156,7 @@ class SourceResolver internal constructor(
             "This source identifies a different episode. Choose another source."
         }
         if (source.directUrl.isNotBlank()) {
-            require(isHttps(source.directUrl)) { "Only HTTPS video sources are supported." }
+            require(isWebLink(source.directUrl)) { "Only HTTP and HTTPS video sources are supported." }
             return PreparedSource.Direct(source.directUrl, identity, source.headers)
         }
         val hash = source.infoHash.lowercase(Locale.ROOT)
@@ -288,6 +288,12 @@ class SourceResolver internal constructor(
             else name to value
         }.take(20).toMap()
     }
+
+    /** Addon direct links may be plain HTTP; debrid links stay HTTPS-only. */
+    private fun isWebLink(value: String): Boolean = try {
+        val uri = URI(value)
+        (uri.scheme.equals("https", true) || uri.scheme.equals("http", true)) && !uri.host.isNullOrBlank() && uri.userInfo == null
+    } catch (_: Exception) { false }
 
     private fun isHttps(value: String): Boolean = try {
         val uri = URI(value)

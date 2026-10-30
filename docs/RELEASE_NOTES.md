@@ -1,7 +1,6 @@
-# POV Rajput 0.2.25
+# POV Rajput 0.2.26
 
-## Playback fixes
+## Works without a debrid service
 
-- **Direct links that redirect now play.** Links that redirect between HTTPS and HTTP (common with file hosts) stopped with `ERROR_CODE_IO_BAD_HTTP_STATUS`. The player now follows them, like Stremio does.
-- **Sources that need request headers now appear and play.** Some addons send streams that only work with a Referer, cookie or User-Agent (Stremio passes these through its local proxy). POV used to hide these sources; it now lists them and sends the headers itself.
-- Header-bound links have short-lived cookies, so they are not reused by "resume last stream". That title searches for fresh sources instead.
+- **Addons are searched even with no debrid service connected.** Previously the sources page stopped at "Connect a debrid service", so direct-link (HTTP) addons were never asked for links. Without debrid, the page now lists the direct links your addons return. Torrent sources still need a debrid service and are left out; if only torrents are found, the page says so.
+- **Plain HTTP direct links are accepted.** Addon links starting with `http://` used to be dropped; they now appear and play. Debrid links remain HTTPS-only.
