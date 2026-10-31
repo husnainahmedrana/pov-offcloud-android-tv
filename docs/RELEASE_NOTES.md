@@ -1,5 +1,7 @@
-# POV Rajput 0.3.5
+# POV Rajput 0.3.6
 
 ## Fix
 
-- **Removing a title from Continue Watching keeps the row in view.** When you remove the first title, the next one takes its place with the selection on it, instead of the selection landing on a card scrolled off the screen. Removing a later title selects the newer one on its left, and it stays visible.
+- **More links play with sound, on phones and TVs.** Links whose audio is Dolby Digital (DD), Dolby Digital Plus (DD+), DTS or TrueHD failed on devices without a decoder for that format, which is most phones and many TVs for DTS and TrueHD. The player now decodes these in software with FFmpeg when the device can't. Your device's own decoders and passthrough to a soundbar or receiver are still tried first, so links that already played behave exactly as before.
+
+Thanks to the FFmpeg project and Jellyfin's prebuilt Media3 FFmpeg decoder.

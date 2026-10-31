@@ -12,8 +12,8 @@ android {
         applicationId = "dev.pov.tv.rajput"
         minSdk = 26
         targetSdk = 35
-        versionCode = 38
-        versionName = "0.3.5-rajput"
+        versionCode = 39
+        versionName = "0.3.6-rajput"
         testInstrumentationRunner = providers.gradleProperty("povTestRunner")
             .orElse("dev.pov.tv.PlaybackAuditInstrumentation").get()
     }
@@ -80,6 +80,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-dash:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("androidx.media3:media3-session:1.11.1")
+    // Phones (and many TVs for DTS/TrueHD) lack these decoders; FFmpeg decodes them to PCM in software.
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
     // Artwork only: HTTP/2 shares one connection per image server, with a disk cache for posters.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // QR code for device sign-in (encoder only).

@@ -198,7 +198,12 @@ object InAppPlaybackSession {
         lastSyncAt = 0L
         val gainProcessor = volumeBoost.createAudioProcessor()
         val renderers = object : DefaultRenderersFactory(application!!) {
-            init { setEnableDecoderFallback(true) }
+            init {
+                setEnableDecoderFallback(true)
+                // Software audio decoders (FFmpeg) are tried only after the device's own
+                // decoders and passthrough, so links that already play are unaffected.
+                setExtensionRendererMode(EXTENSION_RENDERER_MODE_ON)
+            }
             override fun buildVideoRenderers(context: Context, extensionRendererMode: Int,
                 mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector, enableDecoderFallback: Boolean,
                 eventHandler: Handler, eventListener: androidx.media3.exoplayer.video.VideoRendererEventListener,
